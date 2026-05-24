@@ -1,0 +1,17 @@
+# Pacote compartilhado com primitivas blockchain
+cottontrust-core
+
+# RAFT — implementação sobre tikv/raft-rs via Rust/PyO3
+raftify>=0.1.67
+
+# API HTTP — recebe requisições do cottonclient
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.7.0
+
+# Métricas Prometheus — expõe /metrics com latência e throughput da API
+prometheus-fastapi-instrumentator>=6.1.0
+
+# Utilitários
+loguru>=0.7.0
+python-dotenv>=1.0.0

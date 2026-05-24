@@ -1,0 +1,44 @@
+FROM python:3.10-slim
+
+# raftify tem dependências nativas (Rust compilado via PyO3)
+# grpc_tools é necessário para gerar os stubs protobuf em build time
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libssl-dev \
+    libffi-dev \
+    pkg-config \
+    curl \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Instala o pacote compartilhado
+COPY ../packages/cottontrust-core /tmp/cottontrust-core
+RUN pip install --no-cache-dir /tmp/cottontrust-core
+
+# Instala dependências do coordinator
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir grpcio-tools
+
+# Gera stubs protobuf em tempo de build
+# O diretório generated/ NÃO é commitado no repositório
+COPY proto/ /app/proto/
+RUN python -m grpc_tools.protoc \
+        -I /app/proto \
+        --python_out=/app/generated \
+        --grpc_python_out=/app/generated \
+        /app/proto/coordinator.proto
+
+# Copia o código da aplicação
+COPY . .
+
+RUN mkdir -p /app/wallets /app/output /app/raft-data
+
+# Porta da API HTTP
+EXPOSE 8000
+# Porta RAFT (gRPC interno entre coordinators)
+EXPOSE 60061
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

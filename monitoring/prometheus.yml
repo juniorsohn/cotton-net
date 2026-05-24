@@ -1,0 +1,49 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'cotton-net'
+
+scrape_configs:
+
+  # cAdvisor — métricas de containers por nó (mode: global cobre todas as baias)
+  - job_name: 'cadvisor-baia1'
+    static_configs:
+      - targets: ['baia1:8080']
+        labels: {node: 'baia1', supernodo: 'S1'}
+
+  - job_name: 'cadvisor-baia2'
+    static_configs:
+      - targets: ['baia2:8080']
+        labels: {node: 'baia2', supernodo: 'S2'}
+
+  - job_name: 'cadvisor-baia3'
+    static_configs:
+      - targets: ['baia3:8080']
+        labels: {node: 'baia3', supernodo: 'S3'}
+
+  - job_name: 'cadvisor-baia4'
+    static_configs:
+      - targets: ['baia4:8080']
+        labels: {node: 'baia4', supernodo: 'S4'}
+
+  - job_name: 'cadvisor-baia5'
+    static_configs:
+      - targets: ['baia5:8080']
+        labels: {node: 'baia5', supernodo: 'monitoring'}
+
+  # Coordinators — métricas da API FastAPI (latência, throughput, fila, NYMs)
+  - job_name: 'coordinators'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets:
+          - 'baia1:8001'
+          - 'baia2:8002'
+          - 'baia3:8003'
+          - 'baia4:8004'
+        labels: {service: 'coordinator'}
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

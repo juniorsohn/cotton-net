@@ -1,0 +1,6 @@
+indy-vdr>=0.3.4
+aries-askar>=0.3.2
+base58>=2.1.1
+loguru>=0.7.0
+python-dotenv>=1.0.0
+httpx>=0.27.0

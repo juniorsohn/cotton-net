@@ -1,0 +1,24 @@
+FROM python:3.10-slim
+
+# Dependências de sistema para compilar aries-askar e indy-vdr
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libssl-dev \
+    pkg-config \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Instala dependências Python antes de copiar o código
+# (aproveita cache do Docker em rebuilds)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copia o código da aplicação
+COPY . .
+
+# Diretórios de runtime criados aqui para garantir permissões
+RUN mkdir -p /app/wallets /app/output
+
+CMD ["python", "main.py"]

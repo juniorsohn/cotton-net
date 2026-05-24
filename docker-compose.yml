@@ -1,0 +1,260 @@
+# COTTONTRUST / COTTON-NET — Docker Swarm Stack
+#
+# Topologia (4 supernodos + 1 nó de monitoramento):
+#   baia1: coordinator-1 + Supernodo S1 (VON Network)
+#   baia2: coordinator-2 + Supernodo S2 (VON Network)
+#   baia3: coordinator-3 + Supernodo S3 (VON Network)
+#   baia4: coordinator-4 + Supernodo S4 (VON Network)
+#   baia5: cottonclient + prometheus + grafana  (monitoramento / experimentos)
+#
+# Pré-requisitos:
+#   1. Docker Swarm inicializado:  docker swarm init
+#   2. Nós adicionados ao Swarm:   docker swarm join ...
+#   3. VON Networks rodando:       make von-start NODES=32
+#   4. Imagens disponíveis:        make build push
+#
+# Deploy:
+#   make deploy
+
+version: '3.9'
+
+networks:
+  cotton-overlay:
+    driver: overlay
+    attachable: true
+
+configs:
+  prometheus-config:
+    file: ./monitoring/prometheus.yml
+
+volumes:
+  coordinator-1-wallets:
+  coordinator-1-raft:
+  coordinator-1-output:
+  coordinator-2-wallets:
+  coordinator-2-raft:
+  coordinator-2-output:
+  coordinator-3-wallets:
+  coordinator-3-raft:
+  coordinator-3-output:
+  coordinator-4-wallets:
+  coordinator-4-raft:
+  coordinator-4-output:
+  client-output:
+  client-wallets:
+  prometheus-data:
+  grafana-data:
+
+services:
+
+  # ── Coordinators ────────────────────────────────────────────────────────────
+
+  coordinator-1:
+    image: ${REGISTRY:-localhost:5000}/cottontrust-coordinator:latest
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.hostname == baia1]
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits: {cpus: '2', memory: 1G}
+    environment:
+      NODE_ID:      "node-1"
+      NODE_NUM:     "1"
+      RAFT_ADDR:    "0.0.0.0:60061"
+      RAFT_PEERS:   "coordinator-2:60061,coordinator-3:60061,coordinator-4:60061"
+      GENESIS_URL:  "http://baia1:9000/genesis"
+      TRUSTEE_DID:  "${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
+      TRUSTEE_SEED: "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
+      WALLET_KEY:   "${WALLET_KEY:-changeme}"
+      LOG_LEVEL:    "${LOG_LEVEL:-INFO}"
+    ports:
+      - "8001:8000"
+      - "60061:60061"
+    networks: [cotton-overlay]
+    volumes:
+      - coordinator-1-wallets:/app/wallets
+      - coordinator-1-raft:/app/raft-data
+      - coordinator-1-output:/app/output
+
+  coordinator-2:
+    image: ${REGISTRY:-localhost:5000}/cottontrust-coordinator:latest
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.hostname == baia2]
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits: {cpus: '2', memory: 1G}
+    environment:
+      NODE_ID:      "node-2"
+      NODE_NUM:     "2"
+      RAFT_ADDR:    "0.0.0.0:60061"
+      RAFT_PEERS:   "coordinator-1:60061,coordinator-3:60061,coordinator-4:60061"
+      GENESIS_URL:  "http://baia2:9000/genesis"
+      TRUSTEE_DID:  "${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
+      TRUSTEE_SEED: "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
+      WALLET_KEY:   "${WALLET_KEY:-changeme}"
+      LOG_LEVEL:    "${LOG_LEVEL:-INFO}"
+    ports:
+      - "8002:8000"
+      - "60062:60061"
+    networks: [cotton-overlay]
+    volumes:
+      - coordinator-2-wallets:/app/wallets
+      - coordinator-2-raft:/app/raft-data
+      - coordinator-2-output:/app/output
+
+  coordinator-3:
+    image: ${REGISTRY:-localhost:5000}/cottontrust-coordinator:latest
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.hostname == baia3]
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits: {cpus: '2', memory: 1G}
+    environment:
+      NODE_ID:      "node-3"
+      NODE_NUM:     "3"
+      RAFT_ADDR:    "0.0.0.0:60061"
+      RAFT_PEERS:   "coordinator-1:60061,coordinator-2:60061,coordinator-4:60061"
+      GENESIS_URL:  "http://baia3:9000/genesis"
+      TRUSTEE_DID:  "${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
+      TRUSTEE_SEED: "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
+      WALLET_KEY:   "${WALLET_KEY:-changeme}"
+      LOG_LEVEL:    "${LOG_LEVEL:-INFO}"
+    ports:
+      - "8003:8000"
+      - "60063:60061"
+    networks: [cotton-overlay]
+    volumes:
+      - coordinator-3-wallets:/app/wallets
+      - coordinator-3-raft:/app/raft-data
+      - coordinator-3-output:/app/output
+
+  coordinator-4:
+    image: ${REGISTRY:-localhost:5000}/cottontrust-coordinator:latest
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.hostname == baia4]
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits: {cpus: '2', memory: 1G}
+    environment:
+      NODE_ID:      "node-4"
+      NODE_NUM:     "4"
+      RAFT_ADDR:    "0.0.0.0:60061"
+      RAFT_PEERS:   "coordinator-1:60061,coordinator-2:60061,coordinator-3:60061"
+      GENESIS_URL:  "http://baia4:9000/genesis"
+      TRUSTEE_DID:  "${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
+      TRUSTEE_SEED: "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
+      WALLET_KEY:   "${WALLET_KEY:-changeme}"
+      LOG_LEVEL:    "${LOG_LEVEL:-INFO}"
+    ports:
+      - "8004:8000"
+      - "60064:60061"
+    networks: [cotton-overlay]
+    volumes:
+      - coordinator-4-wallets:/app/wallets
+      - coordinator-4-raft:/app/raft-data
+      - coordinator-4-output:/app/output
+
+  # ── Cottonclient ─────────────────────────────────────────────────────────────
+  # Por ora conecta diretamente ao S1.
+  # Futuramente: COORDINATOR_URL apontará para o cluster RAFT.
+
+  cottonclient:
+    image: ${REGISTRY:-localhost:5000}/cottontrust-client:latest
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.hostname == baia5]
+      restart_policy:
+        condition: on-failure
+    environment:
+      GENESIS_URL:      "http://baia1:9000/genesis"
+      TRUSTEE_DID:      "${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
+      TRUSTEE_SEED:     "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
+      WALLET_KEY:       "${WALLET_KEY:-changeme}"
+      LOG_LEVEL:        "${LOG_LEVEL:-INFO}"
+      MODELS_DIR:       "/app/models"
+      METRICS_OUTPUT:   "/app/output/raw_tx_metrics.csv"
+      # Modo COTTON-NET: transações passam pelo cluster RAFT antes do ledger.
+      # Aponta para coordinator-1; qualquer nó do cluster é equivalente.
+      COORDINATOR_URL:  "http://coordinator-1:8000"
+    networks: [cotton-overlay]
+    volumes:
+      - client-output:/app/output
+      - client-wallets:/app/wallets
+
+  # ── Monitoramento (baia5) ────────────────────────────────────────────────────
+
+  # Uma instância de cAdvisor em cada nó do Swarm (mode: global)
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    deploy:
+      mode: global
+      resources:
+        limits: {cpus: '0.5', memory: 256M}
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "8080:8080"
+    networks: [cotton-overlay]
+
+  prometheus:
+    image: prom/prometheus:v2.53.4
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.hostname == baia5]
+      resources:
+        limits: {cpus: '1', memory: 512M}
+    configs:
+      - source: prometheus-config
+        target: /etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    networks: [cotton-overlay]
+    volumes:
+      - prometheus-data:/prometheus
+
+  grafana:
+    image: grafana/grafana:12.0.0
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.hostname == baia5]
+      resources:
+        limits: {cpus: '1', memory: 512M}
+    environment:
+      GF_SECURITY_ADMIN_USER:     "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-cottontrust}"
+      GF_USERS_ALLOW_SIGN_UP:     "false"
+    ports:
+      - "3000:3000"
+    networks: [cotton-overlay]
+    volumes:
+      - grafana-data:/var/lib/grafana

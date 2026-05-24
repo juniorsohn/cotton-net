@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package coordinator;
+
+// ─── Registro de entidade ─────────────────────────────────────────────────────
+
+message RegisterRequest {
+    string entity_id   = 1;  // ID único da entidade (UBA, Bale, etc.)
+    string entity_type = 2;  // "uba", "bale", "client", etc.
+    string did         = 3;  // DID a ser registrado no ledger
+    string verkey      = 4;  // Chave pública associada ao DID
+}
+
+message RegisterResponse {
+    bool   success = 1;  // true se confirmado pelo quórum RAFT
+    string txn_id  = 2;  // ID da transação no ledger (se sucesso)
+    string error   = 3;  // Mensagem de erro (se falha)
+}
+
+// ─── Status do cluster ────────────────────────────────────────────────────────
+
+message StatusRequest {}
+
+message SupernodeStatus {
+    string node_id    = 1;  // Identificador do supernodo
+    string address    = 2;  // Endereço genesis (host:porta)
+    bool   alive      = 3;  // Se o supernodo Indy está respondendo
+    bool   raft_leader = 4; // Se este coordinator é o líder RAFT
+    int32  pending    = 5;  // Transações pendentes de retry
+}
+
+message StatusResponse {
+    string              raft_leader = 1;  // Endereço do líder RAFT atual
+    repeated SupernodeStatus nodes  = 2;  // Status de cada supernodo
+}
+
+// ─── Serviço do Coordinator ───────────────────────────────────────────────────
+
+service CoordinatorService {
+    // Registra uma entidade no ledger via consenso RAFT + Indy
+    rpc Register(RegisterRequest) returns (RegisterResponse);
+
+    // Retorna o status do cluster RAFT e dos supernodos Indy
+    rpc Status(StatusRequest)     returns (StatusResponse);
+}

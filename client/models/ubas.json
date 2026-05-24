@@ -1,0 +1,30 @@
+[
+  {
+    "id":         "UBA-2025-001",
+    "codigo":     "usina",
+    "descricao":  "Usina de Beneficiamento Alto Taquari",
+    "local":      "integrada",
+    "id_empresa": "EMP-0042"
+  },
+  {
+    "id":         "UBA-2025-002",
+    "codigo":     "galpao",
+    "descricao":  "Galpão Central Primavera do Leste",
+    "local":      "nao_integrada",
+    "id_empresa": "EMP-0107"
+  },
+  {
+    "id":         "UBA-2025-003",
+    "codigo":     "deposito",
+    "descricao":  "Depósito Regional Campo Verde",
+    "local":      "integrada",
+    "id_empresa": "EMP-0215"
+  },
+  {
+    "id":         "UBA-2025-004",
+    "codigo":     "usina",
+    "descricao":  "Usina Rondonópolis Sul",
+    "local":      "nao_integrada",
+    "id_empresa": "EMP-0331"
+  }
+]

@@ -1,0 +1,56 @@
+[
+  {
+    "id":                  "FAR-2025-00001",
+    "id_beneficiamento":   "BEN-2025-0042",
+    "id_produto":          "PROD-PLU-01",
+    "produto_descricao":   "Pluma de Algodão Premium",
+    "peso_bruto":          228.5,
+    "peso_liquido":        224.2,
+    "data_hora_producao":  "2025-03-15T08:32:00"
+  },
+  {
+    "id":                  "FAR-2025-00002",
+    "id_beneficiamento":   "BEN-2025-0042",
+    "id_produto":          "PROD-PLU-01",
+    "produto_descricao":   "Pluma de Algodão Premium",
+    "peso_bruto":          231.0,
+    "peso_liquido":        226.8,
+    "data_hora_producao":  "2025-03-15T09:15:00"
+  },
+  {
+    "id":                  "FAR-2025-00003",
+    "id_beneficiamento":   "BEN-2025-0107",
+    "id_produto":          "PROD-CAR-02",
+    "produto_descricao":   "Caroço de Algodão",
+    "peso_bruto":          312.4,
+    "peso_liquido":        308.9,
+    "data_hora_producao":  "2025-03-15T10:05:00"
+  },
+  {
+    "id":                  "FAR-2025-00004",
+    "id_beneficiamento":   "BEN-2025-0215",
+    "id_produto":          "PROD-LIN-03",
+    "produto_descricao":   "Línter de Algodão",
+    "peso_bruto":          185.7,
+    "peso_liquido":        182.3,
+    "data_hora_producao":  "2025-03-15T11:48:00"
+  },
+  {
+    "id":                  "FAR-2025-00005",
+    "id_beneficiamento":   "BEN-2025-0331",
+    "id_produto":          "PROD-PLU-01",
+    "produto_descricao":   "Pluma de Algodão Premium",
+    "peso_bruto":          224.9,
+    "peso_liquido":        220.6,
+    "data_hora_producao":  "2025-03-15T13:22:00"
+  },
+  {
+    "id":                  "FAR-2025-00006",
+    "id_beneficiamento":   "BEN-2025-0331",
+    "id_produto":          "PROD-PLU-02",
+    "produto_descricao":   "Pluma de Algodão Standard",
+    "peso_bruto":          219.3,
+    "peso_liquido":        215.1,
+    "data_hora_producao":  "2025-03-15T14:10:00"
+  }
+]

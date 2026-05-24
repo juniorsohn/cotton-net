@@ -1,0 +1,30 @@
+# Stubs protobuf gerados em build — nunca commitar
+coordinator/generated/
+
+# Wallets e dados de runtime
+**/wallets/
+**/raft-data/
+**/output/
+
+# Ambiente
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
