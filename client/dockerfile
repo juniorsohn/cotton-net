@@ -10,13 +10,19 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Instala dependências Python antes de copiar o código
-# (aproveita cache do Docker em rebuilds)
-COPY requirements.txt .
+# Instala o pacote compartilhado (cottontrust_core.*)
+# O contexto de build é a raiz do projeto (make build usa -f client/dockerfile .)
+COPY packages/cottontrust-core /tmp/cottontrust-core
+RUN pip install --no-cache-dir /tmp/cottontrust-core
+
+# Instala dependências do cliente
+# (indy-vdr, aries-askar, base58 já vêm via cottontrust-core;
+#  aqui ficam apenas as deps exclusivas do client)
+COPY client/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copia o código da aplicação
-COPY . .
+COPY client/ .
 
 # Diretórios de runtime criados aqui para garantir permissões
 RUN mkdir -p /app/wallets /app/output

@@ -60,8 +60,8 @@ von-status:
 	done
 
 build:
-	docker build -t $(REGISTRY)/cottontrust-client:latest ./client
-	docker build -t $(REGISTRY)/cottontrust-coordinator:latest ./coordinator
+	docker build -t $(REGISTRY)/cottontrust-client:latest     -f client/dockerfile .
+	docker build -t $(REGISTRY)/cottontrust-coordinator:latest -f coordinator/dockerfile .
 
 push: build
 	docker push $(REGISTRY)/cottontrust-client:latest
