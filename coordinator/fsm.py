@@ -47,6 +47,7 @@ class CoordinatorFSM:
         self.trustee_did = trustee_did
         self.pending     = pending
         self.applied     = 0
+        self._loop       = asyncio.get_event_loop()
 
     def apply(self, data: bytes) -> bytes:
         """
@@ -69,8 +70,9 @@ class CoordinatorFSM:
         logger.info(f"FSM aplicando | entity_id={entry.entity_id} did={entry.did}")
 
         try:
-            loop = asyncio.get_event_loop()
-            loop.create_task(self._submit_nym(entry))
+            # run_coroutine_threadsafe é necessário porque raftify chama apply()
+            # a partir de um thread Tokio, não do thread principal do asyncio.
+            asyncio.run_coroutine_threadsafe(self._submit_nym(entry), self._loop)
         except Exception as e:
             logger.error(f"FSM: erro ao agendar submissão | erro={e}")
 
