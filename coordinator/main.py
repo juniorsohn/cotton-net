@@ -205,55 +205,18 @@ async def _init_raft(fsm: CoordinatorFSM):
     bind_addr = f"{container_ip}:{raft_port}"
     logger.info(f"RAFT addr | container_ip={container_ip} bind={bind_addr}")
 
-    if NODE_NUM == 1 or not RAFT_PEERS:
-        # Coordinator-1: inicia como líder de cluster de 1 nó
-        raft_inst = Raft.bootstrap(
-            node_id=NODE_NUM,
-            addr=bind_addr,
-            fsm=fsm,
-            config=config,
-            logger=slogger,
-        )
-        asyncio.ensure_future(raft_inst.run())
-        node = raft_inst.get_raft_node()
-        logger.info(f"RAFT iniciado como líder | node={NODE_ID}")
-    else:
-        # Coordinators 2-4: aguardam coordinator-1 e entram no cluster
-        # Para conectar ao líder, usa a VIP via nome do serviço (Docker roteia)
-        leader_addr = f"coordinator-1:{raft_port}"
-        await _wait_dns("coordinator-1")
-
-        ticket = None
-        for attempt in range(30):
-            try:
-                ticket = await Raft.request_id(bind_addr, leader_addr)
-                logger.info(
-                    f"Ticket RAFT obtido | node={NODE_ID} "
-                    f"id_reservado={ticket.get_reserved_id()}"
-                )
-                break
-            except Exception as e:
-                logger.debug(
-                    f"Aguardando líder RAFT | tentativa={attempt + 1} erro={e}"
-                )
-                await asyncio.sleep(3)
-
-        if ticket is None:
-            raise RuntimeError(
-                f"Não foi possível obter ticket RAFT após 30 tentativas | node={NODE_ID}"
-            )
-
-        raft_inst = Raft.bootstrap(
-            node_id=ticket.get_reserved_id(),
-            addr=bind_addr,
-            fsm=fsm,
-            config=config,
-            logger=slogger,
-        )
-        asyncio.ensure_future(raft_inst.run())
-        node = raft_inst.get_raft_node()
-        await node.join_cluster([ticket])
-        logger.info(f"RAFT ingressou no cluster | node={NODE_ID}")
+    # Cada coordinator é um líder de cluster de 1 nó (sem cluster distribuído por enquanto)
+    # Quando request_id/join_cluster funcionar, ativamos a lógica de clustering distribuído
+    raft_inst = Raft.bootstrap(
+        node_id=NODE_NUM,
+        addr=bind_addr,
+        fsm=fsm,
+        config=config,
+        logger=slogger,
+    )
+    asyncio.ensure_future(raft_inst.run())
+    node = raft_inst.get_raft_node()
+    logger.info(f"RAFT iniciado | node={NODE_ID} addr={bind_addr}")
 
     return raft_inst, node
 
