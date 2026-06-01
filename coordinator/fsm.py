@@ -19,6 +19,7 @@ Referência raftify:
 """
 import asyncio
 import json
+import queue
 from loguru import logger
 
 from log_entry import NymLogEntry
@@ -47,17 +48,16 @@ class CoordinatorFSM:
         self.trustee_did = trustee_did
         self.pending     = pending
         self.applied     = 0
-        self._loop       = asyncio.get_event_loop()
+        self._queue: queue.Queue = queue.Queue()
 
-    def apply(self, data: bytes) -> bytes:
+    async def apply(self, data: bytes) -> bytes:
         """
-        Aplica entrada confirmada pelo RAFT — síncrona por necessidade.
+        Aplica entrada confirmada pelo RAFT.
 
-        Raftify (Tokio) chama esta função a partir do runtime Rust.
-        Se apply() for async (corrotina asyncio), PyO3 não executa o
-        await corretamente nesse contexto, causando RecvError/panic.
-        Por isso apply() é síncrona e agenda o trabalho async via
-        asyncio.get_event_loop().create_task().
+        Raftify espera async def (retorna corrotina). O trabalho real
+        é enfileirado numa queue.Queue thread-safe e processado pelo
+        task _drain_queue() que roda no event loop do asyncio.
+        Assim evitamos chamar asyncio de dentro do thread Tokio.
         """
         if not data:
             return b""
@@ -67,16 +67,17 @@ class CoordinatorFSM:
             logger.debug(f"FSM: entrada não-NYM ignorada | bytes={len(data)}")
             return b""
 
-        logger.info(f"FSM aplicando | entity_id={entry.entity_id} did={entry.did}")
-
-        try:
-            # run_coroutine_threadsafe é necessário porque raftify chama apply()
-            # a partir de um thread Tokio, não do thread principal do asyncio.
-            asyncio.run_coroutine_threadsafe(self._submit_nym(entry), self._loop)
-        except Exception as e:
-            logger.error(f"FSM: erro ao agendar submissão | erro={e}")
-
+        logger.info(f"FSM enfileirando | entity_id={entry.entity_id} did={entry.did}")
+        self._queue.put_nowait(entry)
         return b""
+
+    async def drain_queue(self) -> None:
+        """Task permanente que drena a fila de entradas confirmadas pelo RAFT."""
+        while True:
+            while not self._queue.empty():
+                entry = self._queue.get_nowait()
+                await self._submit_nym(entry)
+            await asyncio.sleep(0.05)
 
     async def _submit_nym(self, entry: "NymLogEntry") -> None:
         try:

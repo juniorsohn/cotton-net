@@ -118,7 +118,10 @@ async def lifespan(app: FastAPI):
     # 5. Inicializa cluster RAFT
     raft, raft_node = await _init_raft(fsm)
 
-    # 6. Inicia worker de retry
+    # 6. Drena fila de entradas confirmadas pelo RAFT
+    asyncio.ensure_future(fsm.drain_queue())
+
+    # 7. Inicia worker de retry
     async def _submit_retry(entry: NymLogEntry):
         from cottontrust_core.ledger import submit_nym
         await submit_nym(
