@@ -161,16 +161,37 @@ async def _wait_dns(host: str, timeout: int = 60) -> None:
     logger.warning(f"DNS não resolvido após {timeout}s | host={host}")
 
 
+def _get_container_ip() -> str:
+    """
+    Retorna o IP real do container no overlay Docker.
+
+    Raftify precisa de um IP bindável (não a VIP do serviço Swarm).
+    A VIP é roteável externamente mas não pode ser usada como bind address.
+    O IP do container é tanto bindável quanto roteável dentro do overlay.
+    """
+    import socket
+    import subprocess
+    try:
+        result = subprocess.run(["hostname", "-i"], capture_output=True, text=True)
+        for ip in result.stdout.strip().split():
+            if not ip.startswith("127.") and "." in ip:
+                return ip
+    except Exception:
+        pass
+    return socket.gethostbyname(socket.gethostname())
+
+
 async def _init_raft(fsm: CoordinatorFSM):
     """
     Inicializa o nó RAFT via raftify 0.1.67 usando padrão leader-first.
 
-    Coordinator-1 (NODE_NUM=1) inicia sozinho e torna-se líder imediatamente.
-    Coordinators 2-4 aguardam o coordinator-1, obtêm um ticket via
-    request_id e entram no cluster com join_cluster.
+    Coordinator-1 inicia sozinho como líder.
+    Coordinators 2-4 obtêm ticket via request_id e entram com join_cluster.
 
-    O addr passado ao raftify deve ser o endereço externo (como os demais
-    nós nos alcançam via overlay), não 0.0.0.0.
+    Usa o IP real do container como addr (não a VIP do serviço Swarm nem
+    0.0.0.0), pois raftify tenta bind no addr fornecido.
+    Para conectar ao coordinator-1, usa a VIP via nome do serviço —
+    Docker roteia corretamente para o container.
     """
     import os
     os.makedirs("./raft-data", exist_ok=True)
@@ -180,13 +201,15 @@ async def _init_raft(fsm: CoordinatorFSM):
     slogger = Slogger.default()
 
     raft_port = RAFT_ADDR.split(":")[-1]
-    external_addr = f"coordinator-{NODE_NUM}:{raft_port}"
+    container_ip = _get_container_ip()
+    bind_addr = f"{container_ip}:{raft_port}"
+    logger.info(f"RAFT addr | container_ip={container_ip} bind={bind_addr}")
 
     if NODE_NUM == 1 or not RAFT_PEERS:
         # Coordinator-1: inicia como líder de cluster de 1 nó
         raft_inst = Raft.bootstrap(
             node_id=NODE_NUM,
-            addr=external_addr,
+            addr=bind_addr,
             fsm=fsm,
             config=config,
             logger=slogger,
@@ -196,13 +219,14 @@ async def _init_raft(fsm: CoordinatorFSM):
         logger.info(f"RAFT iniciado como líder | node={NODE_ID}")
     else:
         # Coordinators 2-4: aguardam coordinator-1 e entram no cluster
+        # Para conectar ao líder, usa a VIP via nome do serviço (Docker roteia)
         leader_addr = f"coordinator-1:{raft_port}"
         await _wait_dns("coordinator-1")
 
         ticket = None
         for attempt in range(30):
             try:
-                ticket = await Raft.request_id(external_addr, leader_addr)
+                ticket = await Raft.request_id(bind_addr, leader_addr)
                 logger.info(
                     f"Ticket RAFT obtido | node={NODE_ID} "
                     f"id_reservado={ticket.get_reserved_id()}"
@@ -221,7 +245,7 @@ async def _init_raft(fsm: CoordinatorFSM):
 
         raft_inst = Raft.bootstrap(
             node_id=ticket.get_reserved_id(),
-            addr=external_addr,
+            addr=bind_addr,
             fsm=fsm,
             config=config,
             logger=slogger,
