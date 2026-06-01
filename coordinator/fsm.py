@@ -17,6 +17,7 @@ Referência raftify:
         snapshot()       → serializa estado atual (para log compaction)
         restore(data)    → restaura estado a partir de snapshot
 """
+import asyncio
 import json
 from loguru import logger
 
@@ -47,25 +48,35 @@ class CoordinatorFSM:
         self.pending     = pending
         self.applied     = 0
 
-    async def apply(self, data: bytes) -> bytes:
+    def apply(self, data: bytes) -> bytes:
         """
-        Aplica uma entrada confirmada pelo RAFT.
+        Aplica entrada confirmada pelo RAFT — síncrona por necessidade.
 
-        Chamado pelo raftify após quórum atingido.
-        Entradas no-op (vazias ou não-JSON) são ignoradas — o RAFT as emite
-        internamente quando um novo líder é eleito.
+        Raftify (Tokio) chama esta função a partir do runtime Rust.
+        Se apply() for async (corrotina asyncio), PyO3 não executa o
+        await corretamente nesse contexto, causando RecvError/panic.
+        Por isso apply() é síncrona e agenda o trabalho async via
+        asyncio.get_event_loop().create_task().
         """
         if not data:
             return b""
         try:
             entry = NymLogEntry.decode(data)
         except Exception:
-            logger.debug(f"FSM recebeu entrada não-NYM (no-op ou config), ignorando | bytes={len(data)}")
+            logger.debug(f"FSM: entrada não-NYM ignorada | bytes={len(data)}")
             return b""
-        logger.info(
-            f"FSM aplicando | entity_id={entry.entity_id} did={entry.did}"
-        )
 
+        logger.info(f"FSM aplicando | entity_id={entry.entity_id} did={entry.did}")
+
+        try:
+            loop = asyncio.get_event_loop()
+            loop.create_task(self._submit_nym(entry))
+        except Exception as e:
+            logger.error(f"FSM: erro ao agendar submissão | erro={e}")
+
+        return b""
+
+    async def _submit_nym(self, entry: "NymLogEntry") -> None:
         try:
             _, tx_size = await submit_nym(
                 pool          = self.pool,
@@ -76,20 +87,12 @@ class CoordinatorFSM:
             )
             self.applied += 1
             logger.info(
-                f"NYM aplicado pelo FSM | "
-                f"entity_id={entry.entity_id} "
-                f"did={entry.did} "
-                f"size={tx_size}B "
-                f"total_aplicados={self.applied}"
+                f"NYM aplicado | entity_id={entry.entity_id} "
+                f"did={entry.did} size={tx_size}B total={self.applied}"
             )
         except Exception as e:
-            logger.error(
-                f"FSM falhou ao submeter NYM | "
-                f"entity_id={entry.entity_id} erro={e}"
-            )
+            logger.error(f"FSM: falha ao submeter NYM | entity_id={entry.entity_id} erro={e}")
             await self.pending.enqueue(entry, error=str(e))
-
-        return b""
 
     def encode(self) -> bytes:
         return json.dumps({"applied": self.applied}).encode()
