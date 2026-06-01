@@ -11,8 +11,8 @@
 NODES      ?= 32
 SUPERNODOS ?= 4
 STACK      ?= cottontrust
-SSH_USER   ?= indy
-VON_DIR    ?= /home/indy/von-network
+SSH_USER   ?= g11718038933
+VON_DIR    ?= /mnt/prj/g11718038933/cotton-net_2026/von-network
 
 export DOCKER_API_VERSION ?= 1.41
 
@@ -126,8 +126,8 @@ status:
 experiment: von-start deploy
 	@echo ""
 	@echo "Experimento iniciado | NODES=$(NODES) SUPERNODOS=$(SUPERNODOS)"
-	@echo "Monitoramento: http://$(BAIA5_IP):3000"
-	@echo "Prometheus:    http://$(BAIA5_IP):9090"
+	@echo "Monitoramento: http://$(BAIA5_IP):3002"
+	@echo "Prometheus:    http://$(BAIA5_IP):9091"
 
 .PHONY: help swarm-init registry-start von-start von-stop von-status \
         build push deploy teardown logs-client logs-coord status experiment

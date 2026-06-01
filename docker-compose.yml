@@ -236,7 +236,7 @@ services:
       - '--storage.tsdb.retention.time=30d'
       - '--web.enable-lifecycle'
     ports:
-      - "9090:9090"
+      - "9091:9090"
     networks: [cotton-overlay]
     volumes:
       - prometheus-data:/prometheus
@@ -254,7 +254,7 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-cottontrust}"
       GF_USERS_ALLOW_SIGN_UP:     "false"
     ports:
-      - "3000:3000"
+      - "3002:3000"
     networks: [cotton-overlay]
     volumes:
       - grafana-data:/var/lib/grafana
