@@ -148,6 +148,19 @@ async def _init_trustee():
     return store, did
 
 
+async def _wait_dns(host: str, timeout: int = 60) -> None:
+    """Aguarda até o hostname ser resolvível pelo DNS do Swarm overlay."""
+    import socket
+    for elapsed in range(0, timeout, 2):
+        try:
+            socket.getaddrinfo(host, None)
+            logger.debug(f"DNS resolvido | host={host} ({elapsed}s)")
+            return
+        except socket.gaierror:
+            await asyncio.sleep(2)
+    logger.warning(f"DNS não resolvido após {timeout}s | host={host}")
+
+
 async def _init_raft(fsm: CoordinatorFSM):
     """
     Inicializa o nó RAFT via raftify 0.1.67.
@@ -167,6 +180,8 @@ async def _init_raft(fsm: CoordinatorFSM):
         for addr in addrs:
             while k == NODE_NUM:
                 k += 1
+            host = addr.split(":")[0]
+            await _wait_dns(host)
             peers[k] = Peer(addr=addr, role=InitialRole.VOTER)
             k += 1
 
