@@ -8,7 +8,7 @@ set -euo pipefail
 
 SSH_USER="${SSH_USER:-indy}"
 VON_DIR="${VON_DIR:-/home/indy/von-network}"
-MACHINES=("baia1" "baia2" "baia3" "baia4")
+IFS=' ' read -ra MACHINES <<< "${BAIA_IPS:-10.10.20.151 10.10.20.152 10.10.20.153 10.10.20.154}"
 
 echo "🛑 Parando VON Networks..."
 

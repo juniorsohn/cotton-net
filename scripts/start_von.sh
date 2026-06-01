@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# start_von.sh — Inicia VON Network em cada supernodo via SSH
+# start_von.sh — Configura o von-network compartilhado (NFS) para Kn nós
 #
-# Gera start_nodes.sh e .env dinamicamente para o Kn desejado,
-# copia para cada baia, reconstrói a imagem e inicia em modo
-# combinado (todos os nós num único container via supervisord).
+# Como todas as baias compartilham NFS, este script roda UMA VEZ em qualquer
+# máquina e gera/atualiza três arquivos no VON_DIR:
+#
+#   scripts/start_nodes.sh  — genesis com NODE_NUM="1 2 ... Kn"
+#   docker-compose.yml      — serviços node1..nodeN com portas corretas
+#   von_local_start.sh      — script que cada baia roda localmente
+#
+# O manage é patchado para incluir todos os nós no comando start.
 #
 # Uso:
 #   ./scripts/start_von.sh [TOTAL_NODES] [SUPERNODOS]
 #
 # Exemplos:
-#   ./scripts/start_von.sh 32 4    # 4 supernodos, 8 nós cada
-#   ./scripts/start_von.sh 16 4    # 4 supernodos, 4 nós cada (mínimo)
-#   ./scripts/start_von.sh 8       # 4 supernodos (padrão), 2 nós cada — inválido
+#   ./scripts/start_von.sh 32 4   # Kn=8
+#   ./scripts/start_von.sh 16 4   # Kn=4 (mínimo RBFT)
 
 set -euo pipefail
 
@@ -20,58 +24,42 @@ set -euo pipefail
 TOTAL_NODES=${1:-32}
 SUPERNODOS=${2:-4}
 KN=$(( TOTAL_NODES / SUPERNODOS ))
-
-SSH_USER="${SSH_USER:-indy}"
 VON_DIR="${VON_DIR:-/home/indy/von-network}"
-MACHINES=("baia1" "baia2" "baia3" "baia4")
-GENESIS_PORT="${GENESIS_PORT:-9000}"
-GENESIS_TIMEOUT="${GENESIS_TIMEOUT:-120}"
 
 # ── Validações ────────────────────────────────────────────────────────────────
 
 if (( KN < 4 )); then
-    echo "❌ Erro: Kn=$KN nós por supernodo é insuficiente."
-    echo "   O RBFT do Hyperledger Indy requer no mínimo 4 nós."
-    echo "   Use TOTAL_NODES >= $((SUPERNODOS * 4))."
+    echo "❌ Kn=$KN < 4. Mínimo RBFT é 4 nós. Use TOTAL_NODES >= $((SUPERNODOS * 4))."
     exit 1
 fi
 
-if (( ${#MACHINES[@]} < SUPERNODOS )); then
-    echo "❌ Erro: Mais supernodos ($SUPERNODOS) do que máquinas (${#MACHINES[@]})."
+if [ ! -d "$VON_DIR" ]; then
+    echo "❌ VON_DIR não encontrado: $VON_DIR"
+    echo "   Ajuste VON_DIR no Makefile."
     exit 1
 fi
-
-# ── Banner ────────────────────────────────────────────────────────────────────
 
 echo "╔══════════════════════════════════════════════════════╗"
-echo "║         COTTON-NET — VON Network Setup               ║"
+echo "║         COTTON-NET — VON Network Config (NFS)        ║"
 echo "╠══════════════════════════════════════════════════════╣"
 printf "║  Total de nós:    %-35s║\n" "$TOTAL_NODES"
 printf "║  Supernodos (Sn): %-35s║\n" "$SUPERNODOS"
 printf "║  Nós por Sn (Kn): %-35s║\n" "$KN"
+printf "║  Destino:         %-35s║\n" "$VON_DIR"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 
-# ── Geração do start_nodes.sh ─────────────────────────────────────────────────
-#
-# Gera o script de inicialização do supervisord para Kn nós.
-# O arquivo é gerado localmente em /tmp e depois copiado para cada baia.
-# $HOST e $BAIA_IP precisam ser avaliados dentro do container (runtime),
-# por isso aparecem escapados (\$HOST) no arquivo gerado.
+# ── 1. Gera scripts/start_nodes.sh (genesis + modo combinado) ─────────────────
 
-TMP_START_NODES=$(mktemp /tmp/start_nodes_kn${KN}.XXXXXX.sh)
-trap "rm -f ${TMP_START_NODES}" EXIT
+START_NODES="${VON_DIR}/scripts/start_nodes.sh"
 
 {
     cat <<'HEADER'
 #!/bin/bash
 set -e
-
 HOST="${HOST:-0.0.0.0}"
-START_PORT="9700"
 HEADER
 
-    # NODE_NUM: "1 2 3 ... KN"
     printf 'export NODE_NUM="'
     seq 1 "$KN" | tr '\n' ' ' | sed 's/ $//'
     printf '"\n\n'
@@ -102,7 +90,6 @@ strip_ansi = false
 
 LEDGER_CHECK
 
-    # Bloco [program:nodeX] para cada nó
     for i in $(seq 1 "$KN"); do
         PORT1=$(( 9700 + i * 2 - 1 ))
         PORT2=$(( 9700 + i * 2 ))
@@ -114,14 +101,10 @@ LEDGER_CHECK
         printf '\n'
     done
 
-    # Seção printlogs: tail em todos os logs
     printf '[program:printlogs]\n'
     printf 'command=tail -F /tmp/supervisord.log'
-    for i in $(seq 1 "$KN"); do
-        printf ' /tmp/node%d.log' "$i"
-    done
-    printf '\nstdout_logfile=/dev/stdout\n'
-    printf 'stdout_logfile_maxbytes=0\n'
+    for i in $(seq 1 "$KN"); do printf ' /tmp/node%d.log' "$i"; done
+    printf '\nstdout_logfile=/dev/stdout\nstdout_logfile_maxbytes=0\n'
 
     cat <<'FOOTER'
 __SUPERVISORD__
@@ -129,101 +112,182 @@ __SUPERVISORD__
 echo "Starting $NODE_NUM indy nodes"
 supervisord
 FOOTER
+} > "$START_NODES"
+chmod +x "$START_NODES"
+echo "✅ Gerado: $START_NODES"
 
-} > "$TMP_START_NODES"
-chmod +x "$TMP_START_NODES"
+# ── 2. Gera docker-compose.yml com node1..nodeN ───────────────────────────────
 
-# ── Para instâncias anteriores ────────────────────────────────────────────────
+COMPOSE="${VON_DIR}/docker-compose.yml"
 
-echo "🛑 Parando instâncias anteriores do VON Network..."
-for i in $(seq 0 $(( SUPERNODOS - 1 ))); do
-    MACHINE="${MACHINES[$i]}"
-    SN=$(( i + 1 ))
-    echo "   S$SN → $MACHINE"
-    ssh "${SSH_USER}@${MACHINE}" \
-        "cd ${VON_DIR} && DOCKER_API_VERSION=1.41 ./manage down 2>/dev/null || true" &
-done
-wait
-echo ""
+{
+    cat <<'COMPOSE_HEADER'
+version: '3'
+services:
+  #
+  # Client
+  #
+  client:
+    image: von-network-base
+    command: ./scripts/start_client.sh
+    environment:
+      - IP=${IP}
+      - IPS=${IPS}
+      - DOCKERHOST=${DOCKERHOST}
+      - RUST_LOG=${RUST_LOG}
+    networks:
+      - von
+    volumes:
+      - client-data:/home/indy/.indy_client
+      - ./tmp:/tmp
 
-# ── Configura e inicia cada supernodo em paralelo ─────────────────────────────
+  #
+  # Webserver
+  #
+  webserver:
+    image: von-network-base
+    command: bash -c 'sleep 10 && ./scripts/start_webserver.sh'
+    environment:
+      - IP=${IP}
+      - IPS=${IPS}
+      - DOCKERHOST=${DOCKERHOST}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - RUST_LOG=${RUST_LOG}
+      - GENESIS_URL=${GENESIS_URL}
+      - LEDGER_SEED=${LEDGER_SEED}
+      - LEDGER_CACHE_PATH=${LEDGER_CACHE_PATH}
+      - MAX_FETCH=${MAX_FETCH:-50000}
+      - RESYNC_TIME=${RESYNC_TIME:-120}
+      - POOL_CONNECTION_ATTEMPTS=${POOL_CONNECTION_ATTEMPTS:-5}
+      - POOL_CONNECTION_DELAY=${POOL_CONNECTION_DELAY:-10}
+      - REGISTER_NEW_DIDS=${REGISTER_NEW_DIDS:-True}
+      - ENABLE_LEDGER_CACHE=${ENABLE_LEDGER_CACHE:-True}
+      - ENABLE_BROWSER_ROUTES=${ENABLE_BROWSER_ROUTES:-True}
+      - DISPLAY_LEDGER_STATE=${DISPLAY_LEDGER_STATE:-True}
+      - LEDGER_INSTANCE_NAME=${LEDGER_INSTANCE_NAME:-localhost}
+      - LEDGER_DESCRIPTION=${LEDGER_DESCRIPTION}
+      - WEB_ANALYTICS_SCRIPT=${WEB_ANALYTICS_SCRIPT}
+      - INFO_SITE_TEXT=${INFO_SITE_TEXT}
+      - INFO_SITE_URL=${INFO_SITE_URL}
+      - INDY_SCAN_URL=${INDY_SCAN_URL}
+      - INDY_SCAN_TEXT=${INDY_SCAN_TEXT}
+    networks:
+      - von
+    ports:
+      - ${WEB_SERVER_HOST_PORT:-9000}:8000
+    volumes:
+      - ./config:/home/indy/config
+      - ./server:/home/indy/server
+      - webserver-cli:/home/indy/.indy-cli
+      - webserver-ledger:/home/indy/ledger
 
-echo "🔧 Configurando e iniciando supernodos..."
-for i in $(seq 0 $(( SUPERNODOS - 1 ))); do
-    MACHINE="${MACHINES[$i]}"
-    SN=$(( i + 1 ))
-    (
-        echo "   S$SN → $MACHINE: copiando configuração..."
+  #
+  # Nodes (modo combinado — mantido para compatibilidade)
+  #
+  nodes:
+    image: von-network-base
+    command: ./scripts/start_nodes.sh
+    networks:
+      - von
+    environment:
+      - IP=${IP}
+      - IPS=${IPS}
+      - DOCKERHOST=${DOCKERHOST}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - RUST_LOG=${RUST_LOG}
+    volumes:
+      - nodes-data:/home/indy/ledger
 
-        # IP da baia para o genesis
-        BAIA_IP=$(ssh "${SSH_USER}@${MACHINE}" "hostname -I | awk '{print \$1}'")
+COMPOSE_HEADER
 
-        # IPS = IP repetido KN vezes (parâmetro do von_generate_transactions)
-        IPS_VAL=$(for j in $(seq 1 "$KN"); do printf '%s,' "$BAIA_IP"; done | sed 's/,$//')
+    # Serviços individuais node1..nodeN
+    for i in $(seq 1 "$KN"); do
+        PORT1=$(( 9700 + i * 2 - 1 ))
+        PORT2=$(( 9700 + i * 2 ))
+        cat <<EOF
+  node${i}:
+    image: von-network-base
+    command: ./scripts/start_node.sh ${i}
+    networks:
+      - von
+    ports:
+      - ${PORT1}:${PORT1}
+      - ${PORT2}:${PORT2}
+    environment:
+      - IP=\${IP}
+      - IPS=\${IPS}
+      - DOCKERHOST=\${DOCKERHOST}
+      - LOG_LEVEL=\${LOG_LEVEL}
+      - RUST_LOG=\${RUST_LOG}
+    volumes:
+      - node${i}-data:/home/indy/ledger
 
-        # Copia start_nodes.sh gerado
-        scp -q "$TMP_START_NODES" \
-            "${SSH_USER}@${MACHINE}:${VON_DIR}/scripts/start_nodes.sh"
-
-        # Escreve .env com IP local da baia
-        ssh "${SSH_USER}@${MACHINE}" \
-            "printf 'IP=%s\nIPS=%s\n' '${BAIA_IP}' '${IPS_VAL}' > ${VON_DIR}/.env"
-
-        # Reconstrói imagem com o novo start_nodes.sh
-        echo "   S$SN → $MACHINE: rebuild..."
-        ssh "${SSH_USER}@${MACHINE}" \
-            "cd ${VON_DIR} && DOCKER_API_VERSION=1.41 ./manage build 2>&1 | tail -2"
-
-        # Inicia em modo combinado (todos os Kn nós num único container)
-        echo "   S$SN → $MACHINE: start-combined..."
-        ssh "${SSH_USER}@${MACHINE}" \
-            "cd ${VON_DIR} && DOCKER_API_VERSION=1.41 ./manage start-combined 2>&1 | tail -2"
-
-        echo "   S$SN → $MACHINE: ✅ iniciado"
-    ) &
-done
-wait
-echo ""
-
-# ── Aguarda genesis de cada supernodo ────────────────────────────────────────
-
-echo "⏳ Aguardando genesis endpoints..."
-FAILED=0
-
-for i in $(seq 0 $(( SUPERNODOS - 1 ))); do
-    MACHINE="${MACHINES[$i]}"
-    SN=$(( i + 1 ))
-    URL="http://${MACHINE}:${GENESIS_PORT}/genesis"
-    ELAPSED=0
-
-    printf "   S$SN (%s) " "$URL"
-    until curl -sf "$URL" > /dev/null 2>&1; do
-        if (( ELAPSED >= GENESIS_TIMEOUT )); then
-            echo "❌ timeout após ${GENESIS_TIMEOUT}s"
-            FAILED=$(( FAILED + 1 ))
-            break
-        fi
-        printf "."
-        sleep 3
-        ELAPSED=$(( ELAPSED + 3 ))
+EOF
     done
-    curl -sf "$URL" > /dev/null 2>&1 && echo " ✅"
-done
-echo ""
 
-# ── Resultado ────────────────────────────────────────────────────────────────
+    echo "networks:"
+    echo "  von:"
+    echo ""
+    echo "volumes:"
+    echo "  client-data:"
+    echo "  webserver-cli:"
+    echo "  webserver-ledger:"
+    echo "  nodes-data:"
+    for i in $(seq 1 "$KN"); do
+        echo "  node${i}-data:"
+    done
+} > "$COMPOSE"
+echo "✅ Gerado: $COMPOSE"
 
-if (( FAILED > 0 )); then
-    echo "⚠️  $FAILED supernodo(s) não responderam no tempo esperado."
-    echo "   Verifique: ssh indy@baiaX 'cd ${VON_DIR} && ./manage logs'"
-    exit 1
-fi
+# ── 3. Patcha manage: inclui node1..nodeN no comando start ────────────────────
 
-echo "✅ Todos os $SUPERNODOS supernodos prontos! (${KN} nós cada)"
+MANAGE="${VON_DIR}/manage"
+NODES_LIST=$(seq 1 "$KN" | xargs -I{} printf "node{} " | sed 's/ $//')
+
+# Substitui qualquer linha "-d webserver node..." pelo novo node list
+sed -i "s|-d webserver node[0-9 ]*$|-d webserver ${NODES_LIST}|g" "$MANAGE"
+sed -i "s|-d synctest node[0-9 ]*$|-d synctest ${NODES_LIST}|g" "$MANAGE"
+
+echo "✅ Patchado: $MANAGE (start com ${KN} nós)"
+
+# ── 4. Gera von_local_start.sh — roda em cada baia individualmente ───────────
+
+LOCAL_START="${VON_DIR}/von_local_start.sh"
+
+cat > "$LOCAL_START" <<LOCALSCRIPT
+#!/usr/bin/env bash
+# von_local_start.sh — Gerado por von-config (Kn=${KN})
+# Roda na baia local: reconstrói imagem e inicia os ${KN} nós Indy.
+# Uso: ./von_local_start.sh
+
+set -euo pipefail
+
+MY_IP=\$(hostname -I | awk '{print \$1}')
+IPS_VAL=\$(for i in \$(seq 1 ${KN}); do printf '%s,' "\$MY_IP"; done | sed 's/,\$//')
+VON_DIR="\$(dirname "\$(realpath "\$0")")"
+
+echo "🔧 Rebuild da imagem von-network-base..."
+cd "\$VON_DIR"
+DOCKER_API_VERSION=1.41 ./manage build
+
+echo "🚀 Iniciando VON Network (\${MY_IP}, ${KN} nós)..."
+DOCKER_API_VERSION=1.41 ./manage start "\$IPS_VAL"
+
+echo "✅ VON Network iniciado | genesis: http://\${MY_IP}:9000/genesis"
+LOCALSCRIPT
+
+chmod +x "$LOCAL_START"
+echo "✅ Gerado: $LOCAL_START"
+
+# ── Resumo ────────────────────────────────────────────────────────────────────
+
 echo ""
-echo "Genesis endpoints:"
-for i in $(seq 0 $(( SUPERNODOS - 1 ))); do
-    echo "   S$(( i + 1 )): http://${MACHINES[$i]}:${GENESIS_PORT}/genesis"
-done
+echo "Configuração pronta (NFS — visível em todas as baias)."
 echo ""
-echo "Próximo passo: make deploy"
+echo "Em cada baia (flores, corisco, baiacu, pernambuco):"
+echo ""
+echo "   cd ${VON_DIR} && ./von_local_start.sh"
+echo ""
+echo "Ou pelo Makefile (de dentro de cada baia):"
+echo ""
+echo "   make von-local-start"
