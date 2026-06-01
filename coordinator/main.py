@@ -212,15 +212,33 @@ async def _init_raft(fsm: CoordinatorFSM):
     # Quando request_id/join_cluster funcionar, ativamos a lógica de clustering distribuído
     raft_inst = Raft.bootstrap(
         node_id=NODE_NUM,
-        addr=bind_addr,
+        raft_addr=bind_addr,
         fsm=fsm,
         config=config,
         logger=slogger,
     )
-    asyncio.ensure_future(raft_inst.run())
-    node = raft_inst.get_raft_node()
-    logger.info(f"RAFT iniciado | node={NODE_ID} addr={bind_addr}")
 
+    async def _run_raft():
+        try:
+            await raft_inst.run()
+        except Exception as exc:
+            logger.error(f"RAFT run() encerrou com erro | node={NODE_ID} erro={exc}")
+
+    asyncio.ensure_future(_run_raft())
+
+    # Aguarda o nó eleger-se líder antes de aceitar propostas
+    node = raft_inst.get_raft_node()
+    for _ in range(30):
+        try:
+            if await node.is_leader():
+                break
+        except Exception:
+            pass
+        await asyncio.sleep(0.2)
+    else:
+        logger.warning(f"RAFT ainda não é líder após 6s | node={NODE_ID}")
+
+    logger.info(f"RAFT iniciado | node={NODE_ID} addr={bind_addr}")
     return raft_inst, node
 
 

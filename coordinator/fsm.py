@@ -21,13 +21,14 @@ import asyncio
 import json
 import queue
 from loguru import logger
+from raftify import AbstractStateMachine
 
 from log_entry import NymLogEntry
 from pending import PendingQueue
 from cottontrust_core.ledger import submit_nym
 
 
-class CoordinatorFSM:
+class CoordinatorFSM(AbstractStateMachine):
     """
     Máquina de estados do Coordinator.
 
@@ -102,7 +103,20 @@ class CoordinatorFSM:
 
     @classmethod
     def decode(cls, packed: bytes) -> "CoordinatorFSM":
-        return cls.__new__(cls)
+        obj = cls.__new__(cls)
+        obj._queue = queue.Queue()
+        obj.applied = 0
+        obj.pool = None
+        obj.store = None
+        obj.trustee_did = ""
+        obj.pending = None
+        if packed:
+            try:
+                state = json.loads(packed.decode("utf-8"))
+                obj.applied = state.get("applied", 0)
+            except Exception:
+                pass
+        return obj
 
     async def snapshot(self) -> bytes:
         """

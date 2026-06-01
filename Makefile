@@ -32,7 +32,7 @@ BAIA4_HOST := pernambuco
 BAIA5_HOST := cacao
 
 # Registry em baia1
-REGISTRY   ?= $(BAIA1_IP):5000
+REGISTRY   ?= localhost:5000
 
 # Listas exportadas para os scripts shell
 BAIA_IPS   := $(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP) $(BAIA5_IP)
