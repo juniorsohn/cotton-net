@@ -93,7 +93,7 @@ raft_node = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Inicializa e encerra os componentes do Coordinator."""
-    global registry, pending, fsm, raft
+    global registry, pending, fsm, raft, raft_node
 
     logger.info(f"=== Coordinator iniciando | node={NODE_ID} raft={RAFT_ADDR} ===")
 
