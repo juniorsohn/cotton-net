@@ -11,6 +11,11 @@ RUN apt-get update && apt-get install -y \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
+# Rust é necessário para compilar raftify (PyO3/maturin, sem wheel pré-compilada)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --profile minimal --no-modify-path
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 WORKDIR /app
 
 # Instala o pacote compartilhado (cottontrust_core.*)

@@ -17,7 +17,7 @@ for i in "${!MACHINES[@]}"; do
     SN=$(( i + 1 ))
     echo "   S$SN → $MACHINE"
     ssh "${SSH_USER}@${MACHINE}" \
-        "cd ${VON_DIR} && ./manage stop 2>/dev/null || true" &
+        "cd ${VON_DIR} && DOCKER_API_VERSION=1.41 ./manage stop 2>/dev/null || true" &
 done
 
 wait

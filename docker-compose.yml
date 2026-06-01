@@ -69,7 +69,7 @@ services:
       GENESIS_URL:  "http://baia1:9000/genesis"
       TRUSTEE_DID:  "${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
       TRUSTEE_SEED: "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
-      WALLET_KEY:   "${WALLET_KEY:-changeme}"
+      WALLET_KEY:   "${WALLET_KEY:-7h3gFmD4QZdGdzt2NDtTg3XZwXFENBa1ogAgwHBxHNpw}"
       LOG_LEVEL:    "${LOG_LEVEL:-INFO}"
     ports:
       - "8001:8000"
@@ -100,7 +100,7 @@ services:
       GENESIS_URL:  "http://baia2:9000/genesis"
       TRUSTEE_DID:  "${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
       TRUSTEE_SEED: "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
-      WALLET_KEY:   "${WALLET_KEY:-changeme}"
+      WALLET_KEY:   "${WALLET_KEY:-7h3gFmD4QZdGdzt2NDtTg3XZwXFENBa1ogAgwHBxHNpw}"
       LOG_LEVEL:    "${LOG_LEVEL:-INFO}"
     ports:
       - "8002:8000"
@@ -131,7 +131,7 @@ services:
       GENESIS_URL:  "http://baia3:9000/genesis"
       TRUSTEE_DID:  "${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
       TRUSTEE_SEED: "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
-      WALLET_KEY:   "${WALLET_KEY:-changeme}"
+      WALLET_KEY:   "${WALLET_KEY:-7h3gFmD4QZdGdzt2NDtTg3XZwXFENBa1ogAgwHBxHNpw}"
       LOG_LEVEL:    "${LOG_LEVEL:-INFO}"
     ports:
       - "8003:8000"
@@ -162,7 +162,7 @@ services:
       GENESIS_URL:  "http://baia4:9000/genesis"
       TRUSTEE_DID:  "${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
       TRUSTEE_SEED: "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
-      WALLET_KEY:   "${WALLET_KEY:-changeme}"
+      WALLET_KEY:   "${WALLET_KEY:-7h3gFmD4QZdGdzt2NDtTg3XZwXFENBa1ogAgwHBxHNpw}"
       LOG_LEVEL:    "${LOG_LEVEL:-INFO}"
     ports:
       - "8004:8000"
@@ -189,7 +189,7 @@ services:
       GENESIS_URL:      "http://baia1:9000/genesis"
       TRUSTEE_DID:      "${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
       TRUSTEE_SEED:     "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
-      WALLET_KEY:       "${WALLET_KEY:-changeme}"
+      WALLET_KEY:       "${WALLET_KEY:-7h3gFmD4QZdGdzt2NDtTg3XZwXFENBa1ogAgwHBxHNpw}"
       LOG_LEVEL:        "${LOG_LEVEL:-INFO}"
       MODELS_DIR:       "/app/models"
       METRICS_OUTPUT:   "/app/output/raw_tx_metrics.csv"

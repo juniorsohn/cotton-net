@@ -13,6 +13,8 @@ SUPERNODOS ?= 4
 STACK      ?= cottontrust
 REGISTRY   ?= localhost:5000
 SSH_USER   ?= indy
+
+export DOCKER_API_VERSION ?= 1.41
 VON_DIR    ?= /home/indy/von-network
 
 export REGISTRY SSH_USER VON_DIR
