@@ -163,53 +163,74 @@ async def _wait_dns(host: str, timeout: int = 60) -> None:
 
 async def _init_raft(fsm: CoordinatorFSM):
     """
-    Inicializa o nó RAFT via raftify 0.1.67.
+    Inicializa o nó RAFT via raftify 0.1.67 usando padrão leader-first.
 
-    Constrói a lista de peers e inicializa o nó como líder
-    (sem peers) ou seguidor (com peers).
+    Coordinator-1 (NODE_NUM=1) inicia sozinho e torna-se líder imediatamente.
+    Coordinators 2-4 aguardam o coordinator-1, obtêm um ticket via
+    request_id e entram no cluster com join_cluster.
+
+    O addr passado ao raftify deve ser o endereço externo (como os demais
+    nós nos alcançam via overlay), não 0.0.0.0.
     """
-    raft_config = RaftConfig(
-        election_tick  = 10,
-        heartbeat_tick = 3,
-    )
-
-    peers: dict[int, Peer] = {}
-    if RAFT_PEERS:
-        addrs = [a.strip() for a in RAFT_PEERS.split(",") if a.strip()]
-        k = 1
-        for addr in addrs:
-            while k == NODE_NUM:
-                k += 1
-            host = addr.split(":")[0]
-            await _wait_dns(host)
-            peers[k] = Peer(addr=addr, role=InitialRole.VOTER)
-            k += 1
-
     import os
     os.makedirs("./raft-data", exist_ok=True)
 
-    config = Config(
-        raft_config   = raft_config,
-        log_dir       = "./raft-data",
-        initial_peers = Peers(peers) if peers else None,
-    )
-
+    raft_config = RaftConfig(election_tick=10, heartbeat_tick=3)
+    config = Config(raft_config=raft_config, log_dir="./raft-data")
     slogger = Slogger.default()
 
-    raft_inst = Raft.bootstrap(
-        node_id = NODE_NUM,
-        addr    = RAFT_ADDR,
-        fsm     = fsm,
-        config  = config,
-        logger  = slogger,
-    )
+    raft_port = RAFT_ADDR.split(":")[-1]
+    external_addr = f"coordinator-{NODE_NUM}:{raft_port}"
 
-    asyncio.ensure_future(raft_inst.run())
-    node = raft_inst.get_raft_node()
+    if NODE_NUM == 1 or not RAFT_PEERS:
+        # Coordinator-1: inicia como líder de cluster de 1 nó
+        raft_inst = Raft.bootstrap(
+            node_id=NODE_NUM,
+            addr=external_addr,
+            fsm=fsm,
+            config=config,
+            logger=slogger,
+        )
+        asyncio.ensure_future(raft_inst.run())
+        node = raft_inst.get_raft_node()
+        logger.info(f"RAFT iniciado como líder | node={NODE_ID}")
+    else:
+        # Coordinators 2-4: aguardam coordinator-1 e entram no cluster
+        leader_addr = f"coordinator-1:{raft_port}"
+        await _wait_dns("coordinator-1")
 
-    logger.info(
-        f"RAFT inicializado | node={NODE_ID} (num={NODE_NUM}) peers={list(peers.keys())}"
-    )
+        ticket = None
+        for attempt in range(30):
+            try:
+                ticket = await Raft.request_id(external_addr, leader_addr)
+                logger.info(
+                    f"Ticket RAFT obtido | node={NODE_ID} "
+                    f"id_reservado={ticket.get_reserved_id()}"
+                )
+                break
+            except Exception as e:
+                logger.debug(
+                    f"Aguardando líder RAFT | tentativa={attempt + 1} erro={e}"
+                )
+                await asyncio.sleep(3)
+
+        if ticket is None:
+            raise RuntimeError(
+                f"Não foi possível obter ticket RAFT após 30 tentativas | node={NODE_ID}"
+            )
+
+        raft_inst = Raft.bootstrap(
+            node_id=ticket.get_reserved_id(),
+            addr=external_addr,
+            fsm=fsm,
+            config=config,
+            logger=slogger,
+        )
+        asyncio.ensure_future(raft_inst.run())
+        node = raft_inst.get_raft_node()
+        await node.join_cluster([ticket])
+        logger.info(f"RAFT ingressou no cluster | node={NODE_ID}")
+
     return raft_inst, node
 
 
