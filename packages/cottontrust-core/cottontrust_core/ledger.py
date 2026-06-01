@@ -121,7 +121,12 @@ async def submit_nym(
     tx_size = len(request.body.encode("utf-8"))
 
     await _sign_request(store, submitter_did, request)
-    response = await pool.submit_request(request)
+    try:
+        response = await pool.submit_request(request)
+    except Exception as e:
+        raise RuntimeError(
+            f"Transação rejeitada pelo ledger | did={target_did} motivo={e}"
+        ) from e
 
     if response.get("op") == "REQNACK" or response.get("op") == "REJECT":
         reason = response.get("reason", "sem detalhes")

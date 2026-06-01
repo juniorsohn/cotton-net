@@ -19,14 +19,13 @@ Referência raftify:
 """
 import json
 from loguru import logger
-from raftify import AbstractStateMachine
 
 from log_entry import NymLogEntry
 from pending import PendingQueue
 from cottontrust_core.ledger import submit_nym
 
 
-class CoordinatorFSM(AbstractStateMachine):
+class CoordinatorFSM:
     """
     Máquina de estados do Coordinator.
 
@@ -48,7 +47,7 @@ class CoordinatorFSM(AbstractStateMachine):
         self.pending     = pending
         self.applied     = 0
 
-    async def apply(self, data: bytes) -> None:
+    async def apply(self, data: bytes) -> bytes:
         """
         Aplica uma entrada confirmada pelo RAFT.
 
@@ -86,6 +85,15 @@ class CoordinatorFSM(AbstractStateMachine):
                 f"entity_id={entry.entity_id} erro={e}"
             )
             await self.pending.enqueue(entry, error=str(e))
+
+        return b""
+
+    def encode(self) -> bytes:
+        return json.dumps({"applied": self.applied}).encode()
+
+    @classmethod
+    def decode(cls, packed: bytes) -> "CoordinatorFSM":
+        return cls.__new__(cls)
 
     async def snapshot(self) -> bytes:
         """

@@ -45,7 +45,7 @@ from metrics.collector import MetricsCollector
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
-def setup_logging(level: str) -> None:
+def setup_logging(level: str, log_file: str = "/app/output/cottontrust.log") -> None:
     """Configura o loguru com formato estruturado e colorido."""
     logger.remove()
     logger.add(
@@ -60,7 +60,7 @@ def setup_logging(level: str) -> None:
         colorize=True,
     )
     logger.add(
-        "/app/output/cottontrust.log",
+        log_file,
         level="DEBUG",
         rotation="10 MB",
         retention="7 days",
@@ -164,7 +164,8 @@ async def init_trustee(settings: Settings, pool):
 
 async def run() -> None:
     settings = load_settings()
-    setup_logging(settings.log_level)
+    log_file = str(Path(settings.metrics_output).parent / "cottontrust.log")
+    setup_logging(settings.log_level, log_file)
 
     logger.info("=" * 60)
     logger.info("COTTONTRUST iniciando")

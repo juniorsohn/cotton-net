@@ -19,11 +19,10 @@ Referência:
 """
 import json
 from dataclasses import dataclass, asdict
-from raftify import AbstractLogEntry
 
 
 @dataclass
-class NymLogEntry(AbstractLogEntry):
+class NymLogEntry:
     """
     Entrada de log representando um registro NYM no ledger Indy.
 

@@ -47,7 +47,7 @@ def _key_from_seed(seed: str) -> tuple[Key, str, str]:
         Tupla (key, did, verkey).
     """
     seed_bytes = seed.encode("utf-8")[:32].ljust(32, b"\x00")
-    key = Key.from_secret_bytes(KeyAlg.Ed25519, seed_bytes)
+    key = Key.from_secret_bytes(KeyAlg.ED25519, seed_bytes)
     pub = key.get_public_bytes()
 
     did    = base58.b58encode(pub[:16]).decode()
@@ -77,7 +77,7 @@ async def create_and_store_did(
     if seed:
         key, did, verkey = _key_from_seed(seed)
     else:
-        key    = Key.generate(KeyAlg.Ed25519)
+        key    = Key.generate(KeyAlg.ED25519)
         pub    = key.get_public_bytes()
         did    = base58.b58encode(pub[:16]).decode()
         verkey = base58.b58encode(pub).decode()

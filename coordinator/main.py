@@ -32,11 +32,13 @@ import asyncio
 import os
 import sys
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from loguru import logger
-from raftify import Raft, RaftConfig, Peers, Peer
+from raftify import Raft, RaftConfig, Config, Peers, Peer, Slogger, InitialRole
 from prometheus_fastapi_instrumentator import Instrumentator
 from prometheus_client import REGISTRY
 from prometheus_client.core import GaugeMetricFamily
@@ -79,10 +81,11 @@ logger.add(
 
 # ── Estado global do nó ───────────────────────────────────────────────────────
 
-registry: SupernodeRegistry | None = None
-pending:  PendingQueue | None      = None
-fsm:      CoordinatorFSM | None    = None
-raft:     Raft | None              = None
+registry:  SupernodeRegistry | None = None
+pending:   PendingQueue | None      = None
+fsm:       CoordinatorFSM | None    = None
+raft:      Raft | None              = None
+raft_node = None
 
 
 # ── Ciclo de vida da aplicação ────────────────────────────────────────────────
@@ -113,7 +116,7 @@ async def lifespan(app: FastAPI):
     )
 
     # 5. Inicializa cluster RAFT
-    raft = await _init_raft(fsm)
+    raft, raft_node = await _init_raft(fsm)
 
     # 6. Inicia worker de retry
     async def _submit_retry(entry: NymLogEntry):
@@ -145,44 +148,54 @@ async def _init_trustee():
     return store, did
 
 
-async def _init_raft(fsm: CoordinatorFSM) -> Raft:
+async def _init_raft(fsm: CoordinatorFSM):
     """
-    Inicializa o nó RAFT via raftify.
+    Inicializa o nó RAFT via raftify 0.1.67.
 
-    Constrói a lista de peers a partir de RAFT_PEERS e
-    inicia o nó como líder (se primeiro) ou seguidor.
+    Constrói a lista de peers e inicializa o nó como líder
+    (sem peers) ou seguidor (com peers).
     """
-    config = RaftConfig(
+    raft_config = RaftConfig(
         election_tick  = 10,
         heartbeat_tick = 3,
     )
 
-    # Constrói o mapa de peers { peer_num: Peer(addr) }
-    # Os IDs são inteiros sequenciais (1, 2, 3, 4...) excluindo NODE_NUM.
     peers: dict[int, Peer] = {}
     if RAFT_PEERS:
         addrs = [a.strip() for a in RAFT_PEERS.split(",") if a.strip()]
         k = 1
         for addr in addrs:
-            # Pula o ID deste próprio nó para não se auto-referenciar
             while k == NODE_NUM:
                 k += 1
-            peers[k] = Peer(addr=addr)
+            peers[k] = Peer(addr=addr, role=InitialRole.VOTER)
             k += 1
 
-    raft_node = await Raft.bootstrap(
-        node_id  = NODE_NUM,   # raftify exige inteiro
-        addr     = RAFT_ADDR,
-        fsm      = fsm,
-        config   = config,
-        logger   = logger,
-        peers    = Peers(peers) if peers else None,
+    import os
+    os.makedirs("./raft-data", exist_ok=True)
+
+    config = Config(
+        raft_config   = raft_config,
+        log_dir       = "./raft-data",
+        initial_peers = Peers(peers) if peers else None,
     )
+
+    slogger = Slogger.default()
+
+    raft_inst = Raft.bootstrap(
+        node_id = NODE_NUM,
+        addr    = RAFT_ADDR,
+        fsm     = fsm,
+        config  = config,
+        logger  = slogger,
+    )
+
+    asyncio.ensure_future(raft_inst.run())
+    node = raft_inst.get_raft_node()
 
     logger.info(
         f"RAFT inicializado | node={NODE_ID} (num={NODE_NUM}) peers={list(peers.keys())}"
     )
-    return raft_node
+    return raft_inst, node
 
 
 # ── Métricas Prometheus ───────────────────────────────────────────────────────
@@ -279,7 +292,7 @@ async def register(req: RegisterRequest):
 
     try:
         # Propõe ao cluster RAFT — bloqueia até quórum ou timeout
-        await raft.propose(entry.encode())
+        await raft_node.propose(entry.encode())
         logger.info(
             f"Entrada proposta ao RAFT | "
             f"entity_id={req.entity_id} did={req.did}"
@@ -296,7 +309,7 @@ async def status():
     """Retorna o status deste nó: RAFT, supernodo e pendências."""
     return StatusResponse(
         node_id     = NODE_ID,
-        raft_leader = raft.is_leader() if raft else False,
+        raft_leader = (await raft_node.is_leader()) if raft_node else False,
         supernodo   = registry.local.genesis_url,
         alive       = registry.local.alive,
         pending     = pending.size,
@@ -307,3 +320,8 @@ async def status():
 async def health():
     """Health check para Docker Swarm e load balancers."""
     return {"status": "ok", "node": NODE_ID}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=API_PORT)

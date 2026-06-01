@@ -107,13 +107,20 @@ class CottonCell:
             # tx_size indisponível no modo coordinator (NYM aplicado remotamente)
             tx_size = 0
         else:
-            _, tx_size = await submit_nym(
-                pool=pool,
-                store=trustee_store,
-                submitter_did=trustee_did,
-                target_did=self.did,
-                verkey=self.verkey,
-            )
+            try:
+                _, tx_size = await submit_nym(
+                    pool=pool,
+                    store=trustee_store,
+                    submitter_did=trustee_did,
+                    target_did=self.did,
+                    verkey=self.verkey,
+                )
+            except RuntimeError as e:
+                if "can not touch verkey" in str(e) or "UnauthorizedClientRequest" in str(e):
+                    logger.debug(f"DID já registrado no ledger, ignorando | did={self.did}")
+                    tx_size = 0
+                else:
+                    raise
 
         # 4. Armazena metadados na wallet
         if self.metadata:
