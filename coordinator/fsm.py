@@ -52,13 +52,16 @@ class CoordinatorFSM:
         Aplica uma entrada confirmada pelo RAFT.
 
         Chamado pelo raftify após quórum atingido.
-        O argumento `data` são os bytes brutos do log entry — a
-        deserialização é feita internamente via NymLogEntry.decode().
-        Submete o NYM ao ledger Indy local.
-
-        Se o Indy falhar, enfileira para retry (consistência eventual).
+        Entradas no-op (vazias ou não-JSON) são ignoradas — o RAFT as emite
+        internamente quando um novo líder é eleito.
         """
-        entry = NymLogEntry.decode(data)
+        if not data:
+            return b""
+        try:
+            entry = NymLogEntry.decode(data)
+        except Exception:
+            logger.debug(f"FSM recebeu entrada não-NYM (no-op ou config), ignorando | bytes={len(data)}")
+            return b""
         logger.info(
             f"FSM aplicando | entity_id={entry.entity_id} did={entry.did}"
         )
