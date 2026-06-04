@@ -12,7 +12,7 @@ No COTTON-NET:
     - Se o Indy local falhar, a transação vai para a PendingQueue
 
 Referência raftify:
-    A FSM deve implementar AbstractStateMachine com os métodos:
+    A FSM deve implementar os métodos (duck typing, sem herança):
         apply(entry)     → aplica uma entrada confirmada
         snapshot()       → serializa estado atual (para log compaction)
         restore(data)    → restaura estado a partir de snapshot
@@ -21,14 +21,13 @@ import asyncio
 import json
 import queue
 from loguru import logger
-from raftify import AbstractStateMachine
 
 from log_entry import NymLogEntry
 from pending import PendingQueue
 from cottontrust_core.ledger import submit_nym
 
 
-class CoordinatorFSM(AbstractStateMachine):
+class CoordinatorFSM:
     """
     Máquina de estados do Coordinator.
 
