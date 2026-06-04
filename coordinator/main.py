@@ -173,6 +173,22 @@ async def _wait_dns(host: str, timeout: int = 60) -> None:
     logger.warning(f"DNS não resolvido após {timeout}s | host={host}")
 
 
+async def _wait_port(host: str, port: int, timeout: int = 60) -> None:
+    """Aguarda até host:port aceitar conexões TCP (RAFT já em bind)."""
+    for elapsed in range(0, timeout, 2):
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), timeout=2.0
+            )
+            writer.close()
+            await writer.wait_closed()
+            logger.debug(f"Porta RAFT alcançável | host={host}:{port} ({elapsed}s)")
+            return
+        except Exception:
+            await asyncio.sleep(2)
+    logger.warning(f"Porta RAFT não respondeu após {timeout}s | host={host}:{port}")
+
+
 def _get_container_ip() -> str:
     """
     Retorna o IP real do container no overlay Docker.
@@ -224,6 +240,7 @@ async def _init_raft(fsm: CoordinatorFSM):
         # Follower: aguarda líder e obtém ticket de entrada
         leader_addr = f"coordinator-1:{raft_port}"
         await _wait_dns("coordinator-1")
+        await _wait_port("coordinator-1", int(raft_port))
         logger.info(f"Solicitando ticket ao líder RAFT | leader={leader_addr}")
         ticket = await Raft.request_id(bind_addr, leader_addr)
         reserved_id = ticket.get_reserved_id()
@@ -242,7 +259,7 @@ async def _init_raft(fsm: CoordinatorFSM):
 
     if NODE_NUM != 1:
         logger.info(f"Entrando no cluster RAFT | node={NODE_ID}")
-        await node.join_cluster(ticket)
+        await node.join_cluster([ticket])
 
     # Aguarda líder ser eleito — node-1 torna-se líder imediatamente;
     # followers aguardam o cluster convergir
