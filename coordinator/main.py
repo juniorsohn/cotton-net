@@ -224,7 +224,7 @@ async def _init_raft(fsm: CoordinatorFSM):
     import os
     os.makedirs("./raft-data", exist_ok=True)
 
-    raft_config = RaftConfig(election_tick=10, heartbeat_tick=3)
+    raft_config = RaftConfig(election_tick=20, heartbeat_tick=3)
     config = Config(raft_config=raft_config, log_dir="./raft-data")
     slogger = Slogger.default()
 
@@ -233,19 +233,23 @@ async def _init_raft(fsm: CoordinatorFSM):
     bind_addr = f"{container_ip}:{raft_port}"
     logger.info(f"RAFT addr | container_ip={container_ip} bind={bind_addr}")
 
-    if NODE_NUM == 1:
-        # Líder: bootstrap isolado — followers entram via join_cluster
-        raft_inst = Raft.bootstrap(NODE_NUM, bind_addr, fsm, config, slogger)
-    else:
-        # Follower: aguarda líder e obtém ticket de entrada
-        leader_addr = f"coordinator-1:{raft_port}"
-        await _wait_dns("coordinator-1")
-        await _wait_port("coordinator-1", int(raft_port))
-        logger.info(f"Solicitando ticket ao líder RAFT | leader={leader_addr}")
-        ticket = await Raft.request_id(bind_addr, leader_addr)
-        reserved_id = ticket.get_reserved_id()
-        logger.info(f"Ticket obtido | reserved_id={reserved_id}")
-        raft_inst = Raft.bootstrap(reserved_id, bind_addr, fsm, config, slogger)
+    # Todos os nós sobem com initial_peers declarando o cluster completo.
+    # request_id/join_cluster é para membros dinâmicos — no bootstrap inicial,
+    # todos devem participar da eleição ao mesmo tempo.
+    peer_map = {NODE_NUM: f"coordinator-{NODE_NUM}:{raft_port}"}
+    for entry in RAFT_PEERS.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        host = entry.split(":")[0]
+        num = int(host.split("-")[-1])
+        peer_map[num] = entry
+
+    initial_peers = Peers({num: Peer.connect(addr) for num, addr in peer_map.items()})
+    config = Config(raft_config=raft_config, log_dir="./raft-data", initial_peers=initial_peers)
+    logger.info(f"RAFT peers | {peer_map}")
+
+    raft_inst = Raft.bootstrap(NODE_NUM, bind_addr, fsm, config, slogger)
 
     async def _run_raft():
         try:
@@ -257,13 +261,8 @@ async def _init_raft(fsm: CoordinatorFSM):
 
     node = raft_inst.get_raft_node()
 
-    if NODE_NUM != 1:
-        logger.info(f"Entrando no cluster RAFT | node={NODE_ID}")
-        await node.join_cluster([ticket])
-
-    # Aguarda líder ser eleito — node-1 torna-se líder imediatamente;
-    # followers aguardam o cluster convergir
-    for _ in range(50):
+    # Aguarda eleição — maioria (3 de 4) precisa estar online
+    for _ in range(150):
         try:
             leader_id = await node.get_leader_id()
             if leader_id != 0:
@@ -272,7 +271,7 @@ async def _init_raft(fsm: CoordinatorFSM):
             pass
         await asyncio.sleep(0.2)
     else:
-        logger.warning(f"RAFT: cluster sem líder após 10s | node={NODE_ID}")
+        logger.warning(f"RAFT: cluster sem líder após 30s | node={NODE_ID}")
 
     is_leader = await node.is_leader()
     logger.info(f"RAFT iniciado | node={NODE_ID} addr={bind_addr} leader={is_leader}")
