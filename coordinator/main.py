@@ -245,7 +245,9 @@ async def _init_raft(fsm: CoordinatorFSM):
         num = int(host.split("-")[-1])
         peer_map[num] = entry
 
-    initial_peers = Peers({num: Peer.connect(addr) for num, addr in peer_map.items()})
+    initial_peers = Peers({})
+    for num, addr in peer_map.items():
+        initial_peers.add_peer(num, addr, InitialRole.VOTER)
     config = Config(raft_config=raft_config, log_dir="./raft-data", initial_peers=initial_peers)
     logger.info(f"RAFT peers | {peer_map}")
 
