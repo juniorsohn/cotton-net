@@ -144,7 +144,7 @@ async def init_trustee(settings: Settings, pool):
 
     # Registra o trustee no ledger (idempotente no VON Network)
     try:
-        await submit_nym(
+        _, tx_size = await submit_nym(
             pool=pool,
             store=store,
             submitter_did=did,
@@ -152,6 +152,7 @@ async def init_trustee(settings: Settings, pool):
             verkey=verkey,
             role="TRUSTEE",
         )
+        logger.info(f"Trustee registrado no ledger | did={did} size={tx_size}B")
     except RuntimeError as e:
         # DID já registrado — comportamento esperado no VON Network
         logger.debug(f"Trustee já registrado no ledger: {e}")

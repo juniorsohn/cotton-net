@@ -81,11 +81,12 @@ logger.add(
 
 # ── Estado global do nó ───────────────────────────────────────────────────────
 
-registry:  SupernodeRegistry | None = None
-pending:   PendingQueue | None      = None
-fsm:       CoordinatorFSM | None    = None
-raft:      Raft | None              = None
-raft_node = None
+registry:       SupernodeRegistry | None  = None
+pending:        PendingQueue | None       = None
+fsm:            CoordinatorFSM | None     = None
+raft:           Raft | None               = None
+raft_node                                 = None
+_background_tasks: list[asyncio.Task]    = []
 
 
 # ── Ciclo de vida da aplicação ────────────────────────────────────────────────
@@ -93,7 +94,7 @@ raft_node = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Inicializa e encerra os componentes do Coordinator."""
-    global registry, pending, fsm, raft, raft_node
+    global registry, pending, fsm, raft, raft_node, _background_tasks
 
     logger.info(f"=== Coordinator iniciando | node={NODE_ID} raft={RAFT_ADDR} ===")
 
@@ -119,17 +120,21 @@ async def lifespan(app: FastAPI):
     raft, raft_node = await _init_raft(fsm)
 
     # 6. Drena fila de entradas confirmadas pelo RAFT
-    asyncio.ensure_future(fsm.drain_queue())
+    _background_tasks.append(asyncio.create_task(fsm.drain_queue(), name="drain_queue"))
 
     # 7. Inicia worker de retry
     async def _submit_retry(entry: NymLogEntry):
         from cottontrust_core.ledger import submit_nym
-        await submit_nym(
+        _, tx_size = await submit_nym(
             pool=registry.local.pool,
             store=trustee_store,
             submitter_did=TRUSTEE_DID,
             target_did=entry.did,
             verkey=entry.verkey,
+        )
+        logger.info(
+            f"Retry NYM aplicado | entity_id={entry.entity_id} "
+            f"did={entry.did} size={tx_size}B"
         )
 
     pending.start(_submit_retry)
@@ -139,6 +144,10 @@ async def lifespan(app: FastAPI):
 
     # Encerramento
     logger.info("Coordinator encerrando...")
+    for task in _background_tasks:
+        task.cancel()
+    await asyncio.gather(*_background_tasks, return_exceptions=True)
+    _background_tasks.clear()
     pending.stop()
     await registry.teardown()
 
@@ -212,7 +221,7 @@ async def _init_raft(fsm: CoordinatorFSM):
     # Quando request_id/join_cluster funcionar, ativamos a lógica de clustering distribuído
     raft_inst = Raft.bootstrap(
         node_id=NODE_NUM,
-        raft_addr=bind_addr,
+        addr=bind_addr,
         fsm=fsm,
         config=config,
         logger=slogger,
@@ -224,7 +233,7 @@ async def _init_raft(fsm: CoordinatorFSM):
         except Exception as exc:
             logger.error(f"RAFT run() encerrou com erro | node={NODE_ID} erro={exc}")
 
-    asyncio.ensure_future(_run_raft())
+    _background_tasks.append(asyncio.create_task(_run_raft(), name="raft_run"))
 
     # Aguarda o nó eleger-se líder antes de aceitar propostas
     node = raft_inst.get_raft_node()
