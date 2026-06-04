@@ -43,6 +43,7 @@ class CoordinatorFSM:
     """
 
     def __init__(self, pool, store, trustee_did: str, pending: PendingQueue):
+        self._loop       = asyncio.get_event_loop()  # exigido pelo pyo3_asyncio do raftify
         self.pool        = pool
         self.store       = store
         self.trustee_did = trustee_did
