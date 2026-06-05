@@ -374,7 +374,11 @@ echo "✅ Gerado: $LOCAL_START"
 echo ""
 echo "Configuração pronta (NFS — visível em todas as baias)."
 echo ""
-echo "Em cada baia (flores, corisco, baiacu, pernambuco):"
+
+# Lista apenas os primeiros SUPERNODOS nomes de baia (BAIA_NAMES vem do Makefile)
+BAIA_LIST=( ${BAIA_NAMES:-baia1 baia2 baia3 baia4 baia5} )
+BAIAS_ATIVAS=( "${BAIA_LIST[@]:0:${SUPERNODOS}}" )
+echo "Em cada baia ativa (${BAIAS_ATIVAS[*]}):"
 echo ""
 echo "   cd ${VON_DIR} && ./von_local_start.sh"
 echo ""
