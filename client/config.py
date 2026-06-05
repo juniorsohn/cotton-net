@@ -41,6 +41,8 @@ class Settings:
     metrics_output:  str
     log_level:       str
     coordinator_url: str | None   # None = modo direto (sem RAFT)
+    data_dir:        str | None   # None = usa models_dir (JSON sintético legado)
+    concurrency:     int          # workers paralelos dentro do processo
 
 
 def load_settings() -> Settings:
@@ -68,4 +70,6 @@ def load_settings() -> Settings:
         metrics_output=os.environ.get("METRICS_OUTPUT", "./output/raw_tx_metrics.csv"),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         coordinator_url=os.environ.get("COORDINATOR_URL") or None,
+        data_dir=os.environ.get("DATA_DIR") or None,
+        concurrency=int(os.environ.get("CONCURRENCY", "1")),
     )

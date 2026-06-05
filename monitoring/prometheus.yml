@@ -43,6 +43,20 @@ scrape_configs:
           - 'baia4:8004'
         labels: {service: 'coordinator'}
 
+  # node-exporter — métricas do host (disco, rede, CPU, memória física)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['baia1:9100']
+        labels: {node: 'baia1', supernodo: 'S1'}
+      - targets: ['baia2:9100']
+        labels: {node: 'baia2', supernodo: 'S2'}
+      - targets: ['baia3:9100']
+        labels: {node: 'baia3', supernodo: 'S3'}
+      - targets: ['baia4:9100']
+        labels: {node: 'baia4', supernodo: 'S4'}
+      - targets: ['baia5:9100']
+        labels: {node: 'baia5', supernodo: 'monitoring'}
+
   # Prometheus self-monitoring
   - job_name: 'prometheus'
     static_configs:

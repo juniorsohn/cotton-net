@@ -381,6 +381,110 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Disco — Taxa de Escrita por Nó (host)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 36},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {"lineInterpolation": "smooth", "spanNulls": false}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "sum by (node) (rate(node_disk_written_bytes_total{device!~\"loop.+|dm-.+\"}[1m]))",
+          "legendFormat": "{{node}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Disco — Taxa de Leitura por Nó (host)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 36},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {"lineInterpolation": "smooth", "spanNulls": false}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "sum by (node) (rate(node_disk_read_bytes_total{device!~\"loop.+|dm-.+\"}[1m]))",
+          "legendFormat": "{{node}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Rede — Tráfego Recebido por Nó (host)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 44},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {"lineInterpolation": "smooth", "spanNulls": false}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "sum by (node) (rate(node_network_receive_bytes_total{device!~\"lo|veth.+|br-.+|docker.+\"}[1m]))",
+          "legendFormat": "{{node}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Rede — Tráfego Transmitido por Nó (host)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 44},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {"lineInterpolation": "smooth", "spanNulls": false}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "sum by (node) (rate(node_network_transmit_bytes_total{device!~\"lo|veth.+|br-.+|docker.+\"}[1m]))",
+          "legendFormat": "{{node}}",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "refresh": "10s",

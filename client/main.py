@@ -161,6 +161,84 @@ async def init_trustee(settings: Settings, pool):
     return store, did
 
 
+# ── Cargas de dados ───────────────────────────────────────────────────────────
+
+def _seed_from_id(record_id: str) -> str:
+    """Seed determinístico de 32 chars derivado do ID único do registro."""
+    clean = str(record_id).replace("-", "")
+    return clean[:32].ljust(32, "0")
+
+
+
+async def _worker(
+    worker_id: int,
+    concurrency: int,
+    armazens_all: list,
+    bales_all: list,
+    settings,
+    pool,
+    trustee_store,
+    trustee_did: str,
+    metrics,
+) -> None:
+    """Worker que processa a fatia [worker_id::concurrency] dos registros."""
+    for data in armazens_all[worker_id::concurrency]:
+        uba = UBA.from_json(data, settings.wallet_key, counter=0)
+        uba._seed = _seed_from_id(data["id"])
+        await uba.register(
+            pool, trustee_store, trustee_did, metrics,
+            coordinator_url=settings.coordinator_url,
+        )
+    for data in bales_all[worker_id::concurrency]:
+        bale = Bale.from_json(data, settings.wallet_key, counter=0)
+        bale._seed = _seed_from_id(data["id"])
+        await bale.register(
+            pool, trustee_store, trustee_did, metrics,
+            coordinator_url=settings.coordinator_url,
+        )
+
+
+async def _run_real_data(settings, pool, trustee_store, trustee_did, metrics) -> None:
+    """Registra entidades reais com N workers concorrentes (CONCURRENCY)."""
+    data_dir = Path(settings.data_dir)
+    armazens = load_jsonl(data_dir / "armazens.json")
+    bales    = load_jsonl(data_dir / "bales.json")
+
+    logger.info(
+        f"Dados reais | armazens={len(armazens)} bales={len(bales)} "
+        f"concorrência={settings.concurrency}"
+    )
+
+    await asyncio.gather(*[
+        _worker(i, settings.concurrency, armazens, bales,
+                settings, pool, trustee_store, trustee_did, metrics)
+        for i in range(settings.concurrency)
+    ])
+
+
+async def _run_synthetic(settings, pool, trustee_store, trustee_did, metrics) -> None:
+    """Registra entidades a partir dos JSON sintéticos em MODELS_DIR (legado)."""
+    models_dir = Path(settings.models_dir)
+
+    ubas_data = load_jsonl(models_dir / "ubas.json")
+    logger.info(f"Registrando {len(ubas_data)} UBA(s)...")
+    for i, data in enumerate(ubas_data, start=1):
+        uba = UBA.from_json(data, settings.wallet_key, counter=i)
+        await uba.register(
+            pool, trustee_store, trustee_did, metrics,
+            coordinator_url=settings.coordinator_url,
+        )
+
+    bales_data = load_jsonl(models_dir / "bales.json")
+    logger.info(f"Registrando {len(bales_data)} Bale(s)...")
+    for i, data in enumerate(bales_data, start=1):
+        bale = Bale.from_json(data, settings.wallet_key, counter=i)
+        await bale.register(
+            pool, trustee_store, trustee_did, metrics,
+            coordinator_url=settings.coordinator_url,
+        )
+
+
 # ── Fluxo principal ───────────────────────────────────────────────────────────
 
 async def run() -> None:
@@ -202,29 +280,10 @@ async def run() -> None:
         output_path=settings.metrics_output,
     )
 
-    models_dir = Path(settings.models_dir)
-
-    # Registra UBAs
-    ubas_data = load_jsonl(models_dir / "ubas.json")
-    logger.info(f"Registrando {len(ubas_data)} UBA(s)...")
-
-    for i, data in enumerate(ubas_data, start=1):
-        uba = UBA.from_json(data, settings.wallet_key, counter=i)
-        await uba.register(
-            pool, trustee_store, trustee_did, metrics,
-            coordinator_url=settings.coordinator_url,
-        )
-
-    # Registra Bales
-    bales_data = load_jsonl(models_dir / "bales.json")
-    logger.info(f"Registrando {len(bales_data)} Bale(s)...")
-
-    for i, data in enumerate(bales_data, start=1):
-        bale = Bale.from_json(data, settings.wallet_key, counter=i)
-        await bale.register(
-            pool, trustee_store, trustee_did, metrics,
-            coordinator_url=settings.coordinator_url,
-        )
+    if settings.data_dir:
+        await _run_real_data(settings, pool, trustee_store, trustee_did, metrics)
+    else:
+        await _run_synthetic(settings, pool, trustee_store, trustee_did, metrics)
 
     # Exporta métricas e exibe resumo
     metrics.save()

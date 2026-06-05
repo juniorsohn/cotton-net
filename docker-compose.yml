@@ -180,8 +180,9 @@ services:
       - coordinator-4-output:/app/output
 
   # ── Cottonclient ─────────────────────────────────────────────────────────────
-  # Por ora conecta diretamente ao S1.
-  # Futuramente: COORDINATOR_URL apontará para o cluster RAFT.
+  # CONCURRENCY controla quantos workers paralelos registram entidades.
+  # DATA_DIR aponta para o diretório com armazens.json e bales.json.
+  # Sem DATA_DIR, usa os JSON sintéticos em MODELS_DIR (modo legado).
 
   cottonclient:
     image: ${REGISTRY:-localhost:5000}/cottontrust-client:latest
@@ -197,17 +198,38 @@ services:
       TRUSTEE_SEED:     "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
       WALLET_KEY:       "${WALLET_KEY:-7h3gFmD4QZdGdzt2NDtTg3XZwXFENBa1ogAgwHBxHNpw}"
       LOG_LEVEL:        "${LOG_LEVEL:-INFO}"
-      MODELS_DIR:       "/app/models"
-      METRICS_OUTPUT:   "/app/output/raw_tx_metrics.csv"
-      # Modo COTTON-NET: transações passam pelo cluster RAFT antes do ledger.
-      # Aponta para coordinator-1; qualquer nó do cluster é equivalente.
       COORDINATOR_URL:  "http://coordinator-1:8000"
+      DATA_DIR:         "/app/data"
+      CONCURRENCY:      "${CONCURRENCY:-1}"
+      METRICS_OUTPUT:   "/app/output/raw_tx_metrics.csv"
     networks: [cotton-overlay]
     volumes:
       - client-output:/app/output
       - client-wallets:/app/wallets
+      - ${DATA_DIR:-/mnt/prj/g11718038933/cotton-net_2026/cotton-net/data}:/app/data:ro
 
   # ── Monitoramento (baia5) ────────────────────────────────────────────────────
+
+  # Uma instância de node-exporter em cada nó do Swarm (mode: global)
+  # Expõe métricas do host: CPU, memória, disco, rede
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    deploy:
+      mode: global
+      resources:
+        limits: {cpus: '0.2', memory: 64M}
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    ports:
+      - "9100:9100"
+    networks: [cotton-overlay]
 
   # Uma instância de cAdvisor em cada nó do Swarm (mode: global)
   cadvisor:
