@@ -245,8 +245,8 @@ MANAGE="${VON_DIR}/manage"
 NODES_LIST=$(seq 1 "$KN" | xargs -I{} printf "node{} " | sed 's/ $//')
 
 # Substitui qualquer linha "-d webserver node..." pelo novo node list
-sed -i "s|-d webserver node[0-9 ]*$|-d webserver ${NODES_LIST}|g" "$MANAGE"
-sed -i "s|-d synctest node[0-9 ]*$|-d synctest ${NODES_LIST}|g" "$MANAGE"
+sed -i "s|-d webserver node[0-9][0-9a-z ]*$|-d webserver ${NODES_LIST}|g" "$MANAGE"
+sed -i "s|-d synctest node[0-9][0-9a-z ]*$|-d synctest ${NODES_LIST}|g" "$MANAGE"
 
 echo "✅ Patchado: $MANAGE (start com ${KN} nós)"
 
