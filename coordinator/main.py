@@ -40,7 +40,7 @@ from pydantic import BaseModel
 from loguru import logger
 from raftify import Raft, RaftConfig, Config, Peers, Peer, Slogger, InitialRole
 from prometheus_fastapi_instrumentator import Instrumentator
-from prometheus_client import REGISTRY
+from prometheus_client import REGISTRY, Counter, Histogram
 from prometheus_client.core import GaugeMetricFamily
 
 from supernodes import SupernodeRegistry
@@ -132,12 +132,16 @@ async def lifespan(app: FastAPI):
             target_did=entry.did,
             verkey=entry.verkey,
         )
+        RETRY_APPLIED.labels(node_id=NODE_ID).inc()
         logger.info(
             f"Retry NYM aplicado | entity_id={entry.entity_id} "
             f"did={entry.did} size={tx_size}B"
         )
 
-    pending.start(_submit_retry)
+    def _on_discard(entry: NymLogEntry):
+        RETRY_DISCARDED.labels(node_id=NODE_ID).inc()
+
+    pending.start(_submit_retry, on_discard=_on_discard)
 
     logger.info(f"Coordinator pronto | node={NODE_ID}")
     yield
@@ -291,15 +295,6 @@ class _CottonNetCollector:
     """
 
     def collect(self):
-        if fsm is not None:
-            g = GaugeMetricFamily(
-                "cotton_nym_applied_total",
-                "Total de transações NYM aplicadas pelo FSM RAFT neste nó",
-                labels=["node_id"],
-            )
-            g.add_metric([NODE_ID], float(fsm.applied))
-            yield g
-
         if pending is not None:
             g = GaugeMetricFamily(
                 "cotton_pending_queue_size",
@@ -311,6 +306,26 @@ class _CottonNetCollector:
 
 
 REGISTRY.register(_CottonNetCollector())
+
+# Counters de retry — complementam NYM_ATTEMPTED/NYM_APPLIED/NYM_FAILED do fsm.py
+RETRY_APPLIED = Counter(
+    "cotton_nym_retry_applied_total",
+    "NYMs que falharam na 1ª tentativa e foram aplicados com sucesso via retry",
+    ["node_id"],
+)
+RETRY_DISCARDED = Counter(
+    "cotton_nym_retry_discarded_total",
+    "NYMs descartados após esgotar MAX_ATTEMPTS de retry (falha permanente)",
+    ["node_id"],
+)
+
+# Histograma: latência do consenso RAFT (propose → quórum confirmado)
+RAFT_PROPOSE_LATENCY = Histogram(
+    "cotton_raft_propose_duration_seconds",
+    "Latência do consenso RAFT externo: propose() até quórum confirmado",
+    ["node_id"],
+    buckets=[.01, .025, .05, .1, .25, .5, 1.0, 2.5, 5.0, 10.0],
+)
 
 
 # ── FastAPI ───────────────────────────────────────────────────────────────────
@@ -374,7 +389,8 @@ async def register(req: RegisterRequest):
 
     try:
         # Propõe ao cluster RAFT — bloqueia até quórum ou timeout
-        await raft_node.propose(entry.encode())
+        with RAFT_PROPOSE_LATENCY.labels(node_id=NODE_ID).time():
+            await raft_node.propose(entry.encode())
         logger.info(
             f"Entrada proposta ao RAFT | "
             f"entity_id={req.entity_id} did={req.did}"

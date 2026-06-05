@@ -73,17 +73,20 @@ class PendingQueue:
         async with self._lock:
             self._queue.pop(entity_id, None)
 
-    def start(self, submit_fn) -> None:
+    def start(self, submit_fn, on_discard=None) -> None:
         """
         Inicia o worker de retry em background.
 
         Args:
-            submit_fn: Coroutine async que recebe um NymLogEntry
-                       e tenta submetê-lo ao ledger Indy.
+            submit_fn:  Coroutine async que recebe um NymLogEntry
+                        e tenta submetê-lo ao ledger Indy.
+            on_discard: Callback síncrono chamado quando uma entrada
+                        é descartada após esgotar MAX_ATTEMPTS.
+                        Recebe o NymLogEntry descartado.
         """
-        self._task = asyncio.create_task(self._worker(submit_fn))
+        self._task = asyncio.create_task(self._worker(submit_fn, on_discard))
 
-    async def _worker(self, submit_fn) -> None:
+    async def _worker(self, submit_fn, on_discard=None) -> None:
         """Loop de retry com backoff exponencial."""
         while True:
             await asyncio.sleep(self.RETRY_INTERVAL)
@@ -123,6 +126,8 @@ class PendingQueue:
                             f"entity_id={item.entry.entity_id} "
                             f"erro={e}"
                         )
+                        if on_discard:
+                            on_discard(item.entry)
                         await self.remove(item.entry.entity_id)
                     else:
                         logger.warning(
@@ -132,6 +137,20 @@ class PendingQueue:
                             f"próximo_retry={item.next_retry_sec:.0f}s "
                             f"erro={e}"
                         )
+
+    async def snapshot_data(self) -> list[dict]:
+        """Retorna os dados da fila com lock adquirido, para uso em snapshot RAFT."""
+        async with self._lock:
+            return [
+                {
+                    "entity_id":   p.entry.entity_id,
+                    "entity_type": p.entry.entity_type,
+                    "did":         p.entry.did,
+                    "verkey":      p.entry.verkey,
+                    "attempts":    p.attempts,
+                }
+                for p in self._queue.values()
+            ]
 
     @property
     def size(self) -> int:

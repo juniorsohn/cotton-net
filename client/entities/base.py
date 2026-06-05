@@ -83,7 +83,7 @@ class CottonCell:
             coordinator_url: URL do Coordinator RAFT. Se fornecido, usa o modo
                              COTTON-NET em vez de submeter direto ao Indy.
         """
-        start = time.monotonic()
+        t_start = time.monotonic()
 
         # 1. Cria wallet (sempre local — chave privada nunca sai da entidade)
         wallet_id = f"wallet_{self.entity_type}_{self.entity_id}"
@@ -93,6 +93,7 @@ class CottonCell:
         self.did, self.verkey = await create_and_store_did(
             self.wallet, seed=seed
         )
+        t_after_setup = time.monotonic()
 
         # 3. Registra no ledger — via Coordinator (RAFT) ou direto (Indy)
         if coordinator_url:
@@ -104,7 +105,6 @@ class CottonCell:
                 did=self.did,
                 verkey=self.verkey,
             )
-            # tx_size indisponível no modo coordinator (NYM aplicado remotamente)
             tx_size = 0
         else:
             try:
@@ -121,23 +121,32 @@ class CottonCell:
                     tx_size = 0
                 else:
                     raise
+        t_after_register = time.monotonic()
 
         # 4. Armazena metadados na wallet
         if self.metadata:
             await store_metadata(self.wallet, self.entity_id, self.metadata)
 
-        # 5. Registra métricas
-        duration = time.monotonic() - start
+        t_end = time.monotonic()
+
+        # 5. Registra métricas com decomposição de fases
+        mode = "coordinator" if coordinator_url else "direto"
+        setup_time       = t_after_setup - t_start
+        coordinator_time = t_after_register - t_after_setup if coordinator_url else 0.0
+        total_time       = t_end - t_start
+
         metrics.record(
             operation=f"create_{self.entity_type}",
-            tx_time_sec=duration,
+            tx_time_sec=total_time,
             tx_size_bytes=tx_size,
+            mode=mode,
+            setup_time_sec=setup_time,
+            coordinator_time_sec=coordinator_time,
         )
 
-        mode = "coordinator" if coordinator_url else "direto"
         logger.info(
             f"{self.entity_type.upper()} registrado [{mode}] | "
             f"id={self.entity_id} did={self.did} "
-            f"tempo={duration:.3f}s"
-            + (f" size={tx_size}B" if tx_size else "")
+            f"total={total_time:.3f}s setup={setup_time:.3f}s "
+            + (f"raft={coordinator_time:.3f}s" if coordinator_url else f"size={tx_size}B")
         )

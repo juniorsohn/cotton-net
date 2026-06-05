@@ -19,12 +19,50 @@ Referência raftify:
 """
 import asyncio
 import json
+import os
 import queue
+import time
 from loguru import logger
+from prometheus_client import Counter, Histogram
 
 from log_entry import NymLogEntry
 from pending import PendingQueue
 from cottontrust_core.ledger import submit_nym
+
+_NODE_ID = os.environ["NODE_ID"]
+
+# Latência da submissão NYM ao ledger Indy local (consenso interno Hyperledger)
+INDY_WRITE_LATENCY = Histogram(
+    "cotton_indy_write_duration_seconds",
+    "Latência da submissão NYM ao supernodo Indy local",
+    ["node_id"],
+    buckets=[.1, .25, .5, 1.0, 2.5, 5.0, 10.0, 20.0, 30.0],
+)
+
+# Tempo que uma entrada aguarda na fila do FSM antes de ser processada
+FSM_QUEUE_WAIT = Histogram(
+    "cotton_fsm_queue_wait_seconds",
+    "Tempo de espera na fila do FSM entre apply() e processamento efetivo",
+    ["node_id"],
+    buckets=[.001, .005, .01, .025, .05, .1, .25, .5, 1.0],
+)
+
+# Counters de throughput e taxa de sucesso por nó
+NYM_ATTEMPTED = Counter(
+    "cotton_nym_attempted_total",
+    "NYMs tentados pelo FSM neste nó (todas as tentativas iniciais via RAFT)",
+    ["node_id"],
+)
+NYM_APPLIED = Counter(
+    "cotton_nym_applied_total",
+    "NYMs confirmados com sucesso no ledger Indy local — use rate() para throughput",
+    ["node_id"],
+)
+NYM_FAILED = Counter(
+    "cotton_nym_failed_total",
+    "NYMs que falharam na submissão ao Indy e foram para a fila de retry",
+    ["node_id"],
+)
 
 
 class CoordinatorFSM:
@@ -69,19 +107,22 @@ class CoordinatorFSM:
             return b""
 
         logger.info(f"FSM enfileirando | entity_id={entry.entity_id} did={entry.did}")
-        self._queue.put_nowait(entry)
+        self._queue.put_nowait((entry, time.monotonic()))
         return b""
 
     async def drain_queue(self) -> None:
         """Task permanente que drena a fila de entradas confirmadas pelo RAFT."""
         while True:
             while not self._queue.empty():
-                entry = self._queue.get_nowait()
+                entry, t_enqueue = self._queue.get_nowait()
+                FSM_QUEUE_WAIT.labels(node_id=_NODE_ID).observe(time.monotonic() - t_enqueue)
                 await self._submit_nym(entry)
             await asyncio.sleep(0.05)
 
     async def _submit_nym(self, entry: "NymLogEntry") -> None:
+        NYM_ATTEMPTED.labels(node_id=_NODE_ID).inc()
         try:
+            t0 = time.monotonic()
             _, tx_size = await submit_nym(
                 pool          = self.pool,
                 store         = self.store,
@@ -89,34 +130,17 @@ class CoordinatorFSM:
                 target_did    = entry.did,
                 verkey        = entry.verkey,
             )
+            INDY_WRITE_LATENCY.labels(node_id=_NODE_ID).observe(time.monotonic() - t0)
+            NYM_APPLIED.labels(node_id=_NODE_ID).inc()
             self.applied += 1
             logger.info(
                 f"NYM aplicado | entity_id={entry.entity_id} "
                 f"did={entry.did} size={tx_size}B total={self.applied}"
             )
         except Exception as e:
+            NYM_FAILED.labels(node_id=_NODE_ID).inc()
             logger.error(f"FSM: falha ao submeter NYM | entity_id={entry.entity_id} erro={e}")
             await self.pending.enqueue(entry, error=str(e))
-
-    def encode(self) -> bytes:
-        return json.dumps({"applied": self.applied}).encode()
-
-    @classmethod
-    def decode(cls, packed: bytes) -> "CoordinatorFSM":
-        obj = cls.__new__(cls)
-        obj._queue = queue.Queue()
-        obj.applied = 0
-        obj.pool = None
-        obj.store = None
-        obj.trustee_did = ""
-        obj.pending = None
-        if packed:
-            try:
-                state = json.loads(packed.decode("utf-8"))
-                obj.applied = state.get("applied", 0)
-            except Exception:
-                pass
-        return obj
 
     async def snapshot(self) -> bytes:
         """
@@ -126,17 +150,8 @@ class CoordinatorFSM:
         e as transações pendentes de retry.
         """
         state = {
-            "applied":  self.applied,
-            "pending":  [
-                {
-                    "entity_id":   p.entry.entity_id,
-                    "entity_type": p.entry.entity_type,
-                    "did":         p.entry.did,
-                    "verkey":      p.entry.verkey,
-                    "attempts":    p.attempts,
-                }
-                for p in self.pending._queue.values()
-            ],
+            "applied": self.applied,
+            "pending": await self.pending.snapshot_data(),
         }
         return json.dumps(state).encode("utf-8")
 
