@@ -26,6 +26,12 @@ networks:
 configs:
   prometheus-config:
     file: ./monitoring/prometheus.yml
+  grafana-datasources:
+    file: ./monitoring/provisioning/datasources/prometheus.yml
+  grafana-dashboard-provider:
+    file: ./monitoring/provisioning/dashboards/provider.yml
+  grafana-dashboard-cotton:
+    file: ./monitoring/dashboards/cotton-net.json
 
 volumes:
   coordinator-1-wallets:
@@ -258,3 +264,10 @@ services:
     networks: [cotton-overlay]
     volumes:
       - grafana-data:/var/lib/grafana
+    configs:
+      - source: grafana-datasources
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+      - source: grafana-dashboard-provider
+        target: /etc/grafana/provisioning/dashboards/provider.yml
+      - source: grafana-dashboard-cotton
+        target: /etc/grafana/dashboards/cotton-net.json

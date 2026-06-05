@@ -36,6 +36,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from loguru import logger
 from raftify import Raft, RaftConfig, Config, Peers, Peer, Slogger, InitialRole
@@ -379,6 +380,13 @@ async def register(req: RegisterRequest):
             status_code=503,
             detail=f"Supernodo local indisponível | node={NODE_ID}",
         )
+
+    if not await raft_node.is_leader():
+        leader_id = await raft_node.get_leader_id()
+        if leader_id and leader_id != 0:
+            leader_url = f"http://coordinator-{leader_id}:{API_PORT}/register"
+            logger.debug(f"Redirecionando para líder | node={NODE_ID} leader={leader_id}")
+            return RedirectResponse(url=leader_url, status_code=307)
 
     entry = NymLogEntry(
         entity_id   = req.entity_id,

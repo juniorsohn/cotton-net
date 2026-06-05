@@ -250,7 +250,97 @@ sed -i "s|-d synctest node[0-9 ]*$|-d synctest ${NODES_LIST}|g" "$MANAGE"
 
 echo "✅ Patchado: $MANAGE (start com ${KN} nós)"
 
-# ── 4. Gera von_local_start.sh — roda em cada baia individualmente ───────────
+# ── 4. Gera bin/von_generate_transactions com --nodes ${KN} ──────────────────
+
+GEN_TX="${VON_DIR}/bin/von_generate_transactions"
+
+# Constrói a lista de IPs repetida Kn vezes (ex: Kn=8 → "ip,ip,ip,ip,ip,ip,ip,ip")
+IPS_REPEAT=$(python3 -c "print(','.join(['\"\$ipAddress\"'] * ${KN}))")
+DOCKERHOST_REPEAT=$(python3 -c "print(','.join(['\"\$DOCKERHOST\"'] * ${KN}))")
+
+cat > "$GEN_TX" <<GENSCRIPT
+#!/bin/bash
+# von_generate_transactions — Gerado por start_von.sh (Kn=${KN})
+# NÃO edite manualmente; re-gere com: ./scripts/start_von.sh ${TOTAL_NODES} ${SUPERNODOS}
+
+set -e
+
+rm -rf /var/lib/indy/*
+
+usage () {
+  cat <<-EOF
+
+    Used to generate a genesis transaction file.
+
+    Usage:
+        \$0 [options]
+
+    Options:
+    -i <ip address>
+        Specify the ip address to use in the genesis transaction file.
+    -s <ip addresses>
+        Specify a comma delimited list of addresses to use in the genesis transaction file.
+    -n <node number>
+        Specify the number to use for the given node.
+    -h
+        Display usage documentation.
+
+    Examples:
+        \$0 -i x.x.x.x -n y
+        \$0 -s "a.a.a.a,b.b.b.b,..." -n x
+EOF
+exit 1
+}
+
+options=':i:s:n:h'
+while getopts \$options option
+do
+    case \$option in
+        i  ) ipAddress=\$OPTARG;;
+        s  ) ipAddresses=\$OPTARG;;
+        n  ) nodeNum=\$OPTARG;;
+        h  ) usage; exit;;
+        \? ) echo -e "Unknown option: -\$OPTARG" >&2; exit 1;;
+        :  ) echo -e "Missing option argument for -\$OPTARG" >&2; exit 1;;
+        *  ) echo -e "Unimplemented option: -\$OPTARG" >&2; exit 1;;
+    esac
+done
+
+genesisFileName=\${genesisFileName:-pool_transactions_genesis}
+genesisFileDir=\${genesisFileDir:-/home/indy/ledger/sandbox}
+genesisFilePath=\${genesisFilePath:-\${genesisFileDir}/\${genesisFileName}}
+
+nodeArg=""
+if [ ! -z "\$nodeNum" ]; then
+    nodeArg="--nodeNum \$nodeNum"
+fi
+
+if [ ! -z "\$ipAddresses" ]; then
+    ipsArg="\$ipAddresses"
+elif [ ! -z "\$ipAddress" ]; then
+    ipsArg=${IPS_REPEAT}
+elif [ ! -z "\$DOCKERHOST" ]; then
+    ipsArg=${DOCKERHOST_REPEAT}
+else
+    echo "Error: no IP, IPS, or DOCKERHOST argument provided."
+    exit 1
+fi
+
+echo "Generating genesis | nodes=${KN} ips=\${ipsArg}"
+
+generate_indy_pool_transactions \
+    --nodes ${KN} \
+    --clients 0 \
+    \$nodeArg \
+    --ips "\$ipsArg"
+
+echo "Genesis gerado: \${genesisFilePath}"
+GENSCRIPT
+
+chmod +x "$GEN_TX"
+echo "✅ Gerado: $GEN_TX (--nodes ${KN})"
+
+# ── 5. Gera von_local_start.sh — roda em cada baia individualmente ──────────
 
 LOCAL_START="${VON_DIR}/von_local_start.sh"
 
