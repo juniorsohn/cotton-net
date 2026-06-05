@@ -163,9 +163,9 @@ async def init_trustee(settings: Settings, pool):
 
 # ── Cargas de dados ───────────────────────────────────────────────────────────
 
-def _seed_from_id(record_id: str) -> str:
+def _seed_from_id(record_id: str, suffix: str = "") -> str:
     """Seed determinístico de 32 chars derivado do ID único do registro."""
-    clean = str(record_id).replace("-", "")
+    clean = (str(record_id) + str(suffix)).replace("-", "")
     return clean[:32].ljust(32, "0")
 
 
@@ -184,7 +184,7 @@ async def _worker(
     """Worker que processa a fatia [worker_id::concurrency] dos registros."""
     for data in armazens_all[worker_id::concurrency]:
         uba = UBA.from_json(data, settings.wallet_key, counter=0)
-        uba._seed = _seed_from_id(data["id"])
+        uba._seed = _seed_from_id(data["id"], data.get("tipo", ""))
         await uba.register(
             pool, trustee_store, trustee_did, metrics,
             coordinator_url=settings.coordinator_url,
