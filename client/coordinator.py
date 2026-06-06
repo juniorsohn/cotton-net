@@ -57,7 +57,7 @@ async def register_entity(
         f"url={coordinator_url} entity_id={entity_id} did={did}"
     )
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         response = await client.post(
             f"{coordinator_url.rstrip('/')}/register",
             json=payload,

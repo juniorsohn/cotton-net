@@ -187,7 +187,7 @@ services:
   cottonclient:
     image: ${REGISTRY:-localhost:5000}/cottontrust-client:latest
     deploy:
-      replicas: 1
+      replicas: 0
       placement:
         constraints: [node.hostname == cacao]
       restart_policy:
@@ -206,7 +206,7 @@ services:
     volumes:
       - client-output:/app/output
       - client-wallets:/app/wallets
-      - ${DATA_DIR:-/mnt/prj/g11718038933/cotton-net_2026/cotton-net/data}:/app/data:ro
+      - ${DATA_DIR:-/mnt/prj/g11718038933/cotton-net_2026/data}:/app/data:ro
 
   # ── Monitoramento (baia5) ────────────────────────────────────────────────────
 

@@ -3,10 +3,12 @@
 # Workflow de um experimento:
 #   1. make swarm-init            (uma vez só)
 #   2. make von-start NODES=32    (varia entre experimentos)
-#   3. make deploy
-#   4. make logs-client
-#   5. make teardown && make von-stop
-#   6. Repete a partir do passo 2 com NODES diferente
+#   3. make deploy                (sobe infraestrutura — coordinators, monitoring)
+#   4. make client-start          (inicia o experimento quando tudo estiver pronto)
+#   5. make logs-client           (acompanha a execução)
+#   6. make client-stop           (encerra o client manualmente, se necessário)
+#   7. make teardown && make von-stop
+#   8. Repete a partir do passo 2 com NODES diferente
 
 NODES      ?= 32
 SUPERNODOS ?= 4
@@ -61,6 +63,8 @@ help:
 	@echo "  logs-client             Logs do cottonclient"
 	@echo "  logs-coord NODE=N       Logs do coordinator-N"
 	@echo "  status                  Status do stack"
+	@echo "  client-start            Inicia o cottonclient (réplicas: 0 → 1)"
+	@echo "  client-stop             Para o cottonclient   (réplicas: 1 → 0)"
 	@echo "  experiment NODES=N      von-start + deploy de uma vez"
 	@echo ""
 
@@ -111,6 +115,12 @@ deploy:
 teardown:
 	docker stack rm $(STACK)
 
+client-start:
+	docker service scale $(STACK)_cottonclient=1
+
+client-stop:
+	docker service scale $(STACK)_cottonclient=0
+
 NODE ?= 1
 logs-client:
 	docker service logs -f $(STACK)_cottonclient
@@ -130,4 +140,5 @@ experiment: von-start deploy
 	@echo "Prometheus:    http://$(BAIA5_IP):9091"
 
 .PHONY: help swarm-init registry-start von-start von-stop von-status \
-        build push deploy teardown logs-client logs-coord status experiment
+        build push deploy teardown client-start client-stop \
+        logs-client logs-coord status experiment
