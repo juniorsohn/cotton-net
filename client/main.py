@@ -41,6 +41,7 @@ from cottontrust_core.identity import create_and_store_did
 from entities.uba import UBA
 from entities.bale import Bale
 from metrics.collector import MetricsCollector
+from coordinator import wait_for_drain
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -284,6 +285,11 @@ async def run() -> None:
         await _run_real_data(settings, pool, trustee_store, trustee_did, metrics)
     else:
         await _run_synthetic(settings, pool, trustee_store, trustee_did, metrics)
+
+    # No modo coordinator, aguarda a fila FSM esvaziar antes de encerrar,
+    # garantindo que o tempo total inclui a escrita efetiva em todos os supernodos.
+    if settings.coordinator_url:
+        await wait_for_drain(settings.coordinator_url)
 
     # Exporta métricas e exibe resumo
     metrics.save()

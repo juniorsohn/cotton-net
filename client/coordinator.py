@@ -13,6 +13,7 @@ Fluxo com Coordinator:
                             → FSM.apply() em cada nó
                             → submit_nym() em cada supernodo
 """
+import asyncio
 import httpx
 from loguru import logger
 
@@ -75,3 +76,43 @@ async def register_entity(
         f"Registrado via Coordinator (RAFT) | "
         f"entity_id={entity_id} entity_type={entity_type} did={did}"
     )
+
+
+async def wait_for_drain(
+    coordinator_url: str,
+    poll_interval: float = 5.0,
+    timeout: float = 30.0,
+) -> None:
+    """
+    Aguarda o FSM do coordinator esvaziar a fila de aplicação ao Indy.
+
+    Após enviar todos os requests, o cottonclient chama esta função para
+    garantir que o tempo total do experimento inclui a escrita efetiva
+    em todos os supernodos — tornando a métrica comparável ao modo direto.
+
+    Args:
+        coordinator_url: URL base do coordinator líder.
+        poll_interval:   Intervalo entre polls em segundos.
+        timeout:         Timeout máximo por requisição HTTP.
+    """
+    url = f"{coordinator_url.rstrip('/')}/status"
+    logger.info("Aguardando drenagem da fila FSM do coordinator...")
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        while True:
+            try:
+                r = await client.get(url)
+                r.raise_for_status()
+                data = r.json()
+                fsm_queue   = data.get("fsm_queue", 0)
+                fsm_applied = data.get("fsm_applied", 0)
+                if fsm_queue == 0:
+                    logger.info(
+                        f"Fila FSM drenada | aplicados={fsm_applied}"
+                    )
+                    return
+                logger.debug(
+                    f"Fila FSM | pendentes={fsm_queue} aplicados={fsm_applied}"
+                )
+            except Exception as e:
+                logger.warning(f"Erro ao consultar status do coordinator: {e}")
+            await asyncio.sleep(poll_interval)

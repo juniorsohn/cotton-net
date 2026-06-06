@@ -360,11 +360,13 @@ class RegisterResponse(BaseModel):
 
 
 class StatusResponse(BaseModel):
-    node_id:     str
-    raft_leader: bool
-    supernodo:   str
-    alive:       bool
-    pending:     int
+    node_id:       str
+    raft_leader:   bool
+    supernodo:     str
+    alive:         bool
+    pending:       int
+    fsm_queue:     int
+    fsm_applied:   int
 
 
 @app.post("/register", response_model=RegisterResponse)
@@ -419,6 +421,8 @@ async def status():
         supernodo   = registry.local.genesis_url,
         alive       = registry.local.alive,
         pending     = pending.size,
+        fsm_queue   = fsm._queue.qsize() if fsm else 0,
+        fsm_applied = fsm.applied if fsm else 0,
     )
 
 
