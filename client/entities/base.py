@@ -24,7 +24,7 @@ from loguru import logger
 
 from cottontrust_core.wallet import create_wallet, store_metadata
 from cottontrust_core.identity import create_and_store_did
-from cottontrust_core.ledger import submit_nym
+from cottontrust_core.ledger import submit_nym, submit_nym_endorsed, submit_attrib
 from metrics.collector import MetricsCollector
 
 
@@ -63,6 +63,8 @@ class CottonCell:
         metrics: MetricsCollector,
         seed: str | None = None,
         coordinator_url: str | None = None,
+        endorser_store=None,
+        endorser_did: str = "",
     ) -> None:
         """
         Inicializa a entidade na rede COTTONTRUST.
@@ -95,7 +97,8 @@ class CottonCell:
         )
         t_after_setup = time.monotonic()
 
-        # 3. Registra no ledger — via Coordinator (RAFT) ou direto (Indy)
+        # 3. Registra no ledger — coordinator, author+endorser, ou trustee direto
+        tx_size = 0
         if coordinator_url:
             from coordinator import register_entity
             await register_entity(
@@ -105,7 +108,16 @@ class CottonCell:
                 did=self.did,
                 verkey=self.verkey,
             )
-            tx_size = 0
+        elif endorser_store and endorser_did:
+            _, tx_size = await submit_nym_endorsed(
+                pool=pool,
+                author_store=self.wallet,
+                author_did=self.did,
+                endorser_store=endorser_store,
+                endorser_did=endorser_did,
+                target_did=self.did,
+                verkey=self.verkey,
+            )
         else:
             try:
                 _, tx_size = await submit_nym(
@@ -118,22 +130,42 @@ class CottonCell:
             except RuntimeError as e:
                 if "can not touch verkey" in str(e) or "UnauthorizedClientRequest" in str(e):
                     logger.debug(f"DID já registrado no ledger, ignorando | did={self.did}")
-                    tx_size = 0
                 else:
                     raise
         t_after_register = time.monotonic()
 
-        # 4. Armazena metadados na wallet
+        # 4. Escreve atributos publicos no ledger (rastreabilidade)
+        public_fields = getattr(self, "_public_fields", [])
+        if public_fields and pool and not coordinator_url:
+            public_meta = {k: v for k, v in self.metadata.items() if k in public_fields}
+            if endorser_did:
+                public_meta["endorser_did"] = endorser_did
+            if public_meta:
+                attrib_size = await submit_attrib(
+                    pool=pool,
+                    store=self.wallet,
+                    submitter_did=self.did,
+                    raw_attrs=public_meta,
+                )
+                tx_size += attrib_size
+
+        # 5. Armazena metadados na wallet
         if self.metadata:
             await store_metadata(self.wallet, self.entity_id, self.metadata)
 
         t_end = time.monotonic()
 
-        # 5. Registra métricas com decomposição de fases
-        mode = "coordinator" if coordinator_url else "direto"
+        # 6. Registra métricas com decomposição de fases
         setup_time       = t_after_setup - t_start
-        coordinator_time = t_after_register - t_after_setup if coordinator_url else 0.0
+        coordinator_time = (t_after_register - t_after_setup) if coordinator_url else 0.0
         total_time       = t_end - t_start
+
+        if coordinator_url:
+            mode = "coordinator"
+        elif endorser_store and endorser_did:
+            mode = "endorsed"
+        else:
+            mode = "direto"
 
         metrics.record(
             operation=f"create_{self.entity_type}",
@@ -148,5 +180,6 @@ class CottonCell:
             f"{self.entity_type.upper()} registrado [{mode}] | "
             f"id={self.entity_id} did={self.did} "
             f"total={total_time:.3f}s setup={setup_time:.3f}s "
-            + (f"raft={coordinator_time:.3f}s" if coordinator_url else f"size={tx_size}B")
+            + (f"coord={coordinator_time:.3f}s " if coordinator_url else "")
+            + (f"size={tx_size}B" if tx_size else "")
         )

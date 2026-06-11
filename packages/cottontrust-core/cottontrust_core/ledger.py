@@ -80,6 +80,96 @@ async def _sign_request(store: Store, submitter_did: str, request) -> None:
     request.set_signature(signature)
 
 
+async def submit_nym_endorsed(
+    pool: Pool,
+    author_store: Store,
+    author_did: str,
+    endorser_store: Store,
+    endorser_did: str,
+    target_did: str,
+    verkey: str,
+    alias: str | None = None,
+    role: str | None = None,
+) -> tuple[dict, int]:
+    """
+    Constrói, assina e submete um NYM com padrão author+endorser.
+
+    O author (entidade) assina provando posse da chave.
+    O endorser (pai na cadeia) countersigns dando permissão de escrita.
+    Implementa rastreabilidade de proveniência via assinatura encadeada.
+    """
+    request = indy_vdr.ledger.build_nym_request(
+        submitter_did=author_did,
+        dest=target_did,
+        verkey=verkey,
+        alias=alias,
+        role=role,
+    )
+
+    request.set_endorser(endorser_did)
+    tx_size = len(request.body.encode("utf-8"))
+
+    await _sign_request(author_store, author_did, request)
+
+    async with endorser_store.session() as session:
+        entry = await session.fetch_key(endorser_did)
+        if not entry:
+            raise RuntimeError(
+                f"Chave do endorser nao encontrada na wallet | did={endorser_did}"
+            )
+        sig = entry.key.sign_message(request.signature_input)
+    request.set_multi_signature(endorser_did, sig)
+
+    response = await pool.submit_request(request)
+
+    if response.get("op") in ("REQNACK", "REJECT"):
+        reason = response.get("reason", "sem detalhes")
+        raise RuntimeError(
+            f"Transacao rejeitada | did={target_did} motivo={reason}"
+        )
+
+    txn_id = (
+        response.get("result", {}).get("txnMetadata", {}).get("txnId", "unknown")
+    )
+    logger.debug(
+        f"NYM endorsado | did={target_did} txnId={txn_id} size={tx_size}B"
+    )
+    return response, tx_size
+
+
+async def submit_attrib(
+    pool: Pool,
+    store: Store,
+    submitter_did: str,
+    raw_attrs: dict,
+) -> int:
+    """
+    Escreve atributos publicos de um DID no ledger via ATTRIB transaction.
+
+    Apenas dados nao-sensiveis devem ser passados em raw_attrs.
+    O submitter_did deve ser o proprio DID alvo (auto-ATTRIB).
+    Retorna o tamanho em bytes da transacao.
+    """
+    import json as _json
+    request = indy_vdr.ledger.build_attrib_request(
+        submitter_did=submitter_did,
+        target_did=submitter_did,
+        raw=_json.dumps(raw_attrs, ensure_ascii=False),
+        xhash=None,
+        enc=None,
+    )
+    tx_size = len(request.body.encode("utf-8"))
+    await _sign_request(store, submitter_did, request)
+    response = await pool.submit_request(request)
+
+    if response.get("op") in ("REQNACK", "REJECT"):
+        reason = response.get("reason", "sem detalhes")
+        raise RuntimeError(f"ATTRIB rejeitado | did={submitter_did} motivo={reason}")
+
+    logger.debug(f"ATTRIB registrado | did={submitter_did} size={tx_size}B")
+    return tx_size
+
+
 async def submit_nym(
     pool: Pool,
     store: Store,

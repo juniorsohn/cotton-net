@@ -1,31 +1,19 @@
 """
 COTTONTRUST — Orquestrador principal do cliente.
 
-Responsável por coordenar o fluxo completo de registro de entidades
-na rede COTTONTRUST:
+Fluxo de registro com cadeia de endorsers (author+endorser SSI):
 
-    1. Carrega configuração do ambiente (.env)
-    2. Conecta ao pool Indy (via indy-vdr)
-    3. Inicializa o trustee (endossador das transações)
-    4. Registra UBAs no ledger
-    5. Registra Bales no ledger
-    6. Exporta métricas de desempenho para CSV
+    Nivel 1: Entidades     — endossadas pelo trustee
+    Nivel 2: Fazendas      — endossadas pelo trustee (id_entidade ausente nos dados)
+    Nivel 3: Setores       — endossados pela sua Fazenda
+    Nivel 4: Talhoes       — endossados pelo seu Setor
+    Nivel 5: Armazens      — endossados pelo trustee
+    Nivel 6: Lotes MP      — endossados pelo seu Armazem (id_armazem direto)
+    Nivel 7: Fardinhos     — endossados pelo trustee (sem id_armazem nos dados)
 
-Arquitetura COTTON-CELL (Duarte et al., 2024):
-    Cada entidade é um nó identificado por um DID único,
-    registrado imutavelmente no ledger via operação REG_ENTITY,
-    com metadados armazenados em sua wallet digital.
-
-COTTON-NET (Sohn Junior, 2025):
-    A replicação para supernodos (CNv1/CNv2) será coordenada
-    pelo serviço Coordinator, a ser integrado na próxima etapa.
-    Por ora, o cliente opera sobre um único pool.
-
-Uso:
-    python main.py
-
-    Ou via Docker:
-    docker run --env-file .env cottontrust-client
+O registro em ordem garante que o endorser ja existe no ledger
+antes de assinar o filho. O registry mapeia entity_id real -> (wallet, did)
+para lookup durante o registro dos filhos.
 """
 import asyncio
 import json
@@ -38,13 +26,16 @@ from config import load_settings, Settings
 from cottontrust_core.ledger import open_pool, submit_nym
 from cottontrust_core.wallet import create_wallet
 from cottontrust_core.identity import create_and_store_did
-from entities.uba import UBA
-from entities.bale import Bale
+from entities.entidade import Entidade
+from entities.fazenda import Fazenda
+from entities.setor import Setor
+from entities.talhao import Talhao
+from entities.armazem import Armazem
+from entities.lote_mp import LoteMP
+from entities.fardinho import Fardinho
 from metrics.collector import MetricsCollector
 from coordinator import wait_for_drain
 
-
-# ── Logging ───────────────────────────────────────────────────────────────────
 
 def setup_logging(level: str, log_file: str = "/app/output/cottontrust.log") -> None:
     """Configura o loguru com formato estruturado e colorido."""
@@ -69,81 +60,22 @@ def setup_logging(level: str, log_file: str = "/app/output/cottontrust.log") -> 
     )
 
 
-# ── Carregamento de dados ─────────────────────────────────────────────────────
-
-def load_jsonl(path: Path) -> list[dict]:
-    """
-    Carrega registros de um arquivo JSON.
-
-    Suporta tanto arrays JSON quanto JSON Lines (um objeto por linha),
-    ignorando linhas vazias ou malformadas com um aviso.
-
-    Args:
-        path: Caminho do arquivo JSON.
-
-    Returns:
-        Lista de dicionários com os registros carregados.
-    """
+def load_json(path: Path) -> list[dict]:
     if not path.exists():
-        logger.warning(f"Arquivo não encontrado: {path}")
+        logger.warning(f"Arquivo nao encontrado: {path}")
         return []
+    content = path.read_text(encoding="utf-8").strip()
+    if not content or content == "null":
+        return []
+    parsed = json.loads(content)
+    return parsed if isinstance(parsed, list) else []
 
-    records = []
-    with open(path, encoding="utf-8") as f:
-        content = f.read().strip()
-
-    # Tenta carregar como array JSON primeiro
-    try:
-        parsed = json.loads(content)
-        if isinstance(parsed, list):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-
-    # Fallback: JSON Lines (um objeto por linha)
-    for i, line in enumerate(content.splitlines(), start=1):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            logger.warning(f"Linha {i} ignorada (JSON inválido): {line[:60]}...")
-
-    return records
-
-
-# ── Trustee ───────────────────────────────────────────────────────────────────
 
 async def init_trustee(settings: Settings, pool):
-    """
-    Inicializa o trustee na wallet local.
-
-    O trustee é o endossador de todas as transações NYM no COTTONTRUST.
-    Seu DID já está registrado no ledger genesis do VON Network com
-    role TRUSTEE, portanto não precisa ser re-registrado — apenas
-    sua chave precisa estar disponível na wallet local para assinar.
-
-    Args:
-        settings: Configurações da aplicação.
-        pool:     Conexão com o pool Indy.
-
-    Returns:
-        Tupla (trustee_store, trustee_did).
-    """
-    logger.info("Inicializando trustee...")
-
     store = await create_wallet("wallet_trustee", settings.wallet_key)
     did, verkey = await create_and_store_did(store, seed=settings.trustee_seed)
-
-    # Garante que o DID derivado do seed corresponde ao DID configurado
     if did != settings.trustee_did:
-        logger.warning(
-            f"DID derivado ({did}) difere do TRUSTEE_DID configurado "
-            f"({settings.trustee_did}). Verifique o TRUSTEE_SEED."
-        )
-
-    # Registra o trustee no ledger (idempotente no VON Network)
+        logger.warning(f"DID derivado ({did}) difere do TRUSTEE_DID configurado.")
     try:
         _, tx_size = await submit_nym(
             pool=pool,
@@ -155,92 +87,48 @@ async def init_trustee(settings: Settings, pool):
         )
         logger.info(f"Trustee registrado no ledger | did={did} size={tx_size}B")
     except RuntimeError as e:
-        # DID já registrado — comportamento esperado no VON Network
-        logger.debug(f"Trustee já registrado no ledger: {e}")
-
+        logger.debug(f"Trustee ja registrado: {e}")
     logger.info(f"Trustee pronto | did={did}")
     return store, did
 
 
-# ── Cargas de dados ───────────────────────────────────────────────────────────
+async def register_all(entities, klass, wallet_key, pool, trustee_store, trustee_did,
+                       metrics, coordinator_url, endorser_registry: dict,
+                       parent_id_field: str | None = None) -> dict:
+    """
+    Registra uma lista de entidades e devolve um registry {entity_id: (wallet, did)}.
 
-def _seed_from_id(record_id: str, suffix: str = "") -> str:
-    """Seed determinístico de 32 chars derivado do ID único do registro."""
-    clean = (str(record_id) + str(suffix)).replace("-", "")
-    return clean[:32].ljust(32, "0")
+    Se parent_id_field for fornecido, busca o endorser no endorser_registry
+    usando data[parent_id_field] como chave. Se nao encontrar, usa trustee.
+    """
+    registry = {}
+    for i, data in enumerate(entities, start=1):
+        obj = klass.from_json(data, wallet_key, counter=i)
 
+        endorser_store, endorser_did_val = None, ""
+        if parent_id_field:
+            parent_id = str(data.get(parent_id_field) or "")
+            if parent_id in endorser_registry:
+                endorser_store, endorser_did_val = endorser_registry[parent_id]
+            else:
+                logger.debug(
+                    f"Endorser nao encontrado para {parent_id_field}={parent_id} "
+                    f"— usando trustee como fallback"
+                )
 
-
-async def _worker(
-    worker_id: int,
-    concurrency: int,
-    armazens_all: list,
-    bales_all: list,
-    settings,
-    pool,
-    trustee_store,
-    trustee_did: str,
-    metrics,
-) -> None:
-    """Worker que processa a fatia [worker_id::concurrency] dos registros."""
-    for data in armazens_all[worker_id::concurrency]:
-        uba = UBA.from_json(data, settings.wallet_key, counter=0)
-        uba._seed = _seed_from_id(data["id"], data.get("tipo", ""))
-        await uba.register(
-            pool, trustee_store, trustee_did, metrics,
-            coordinator_url=settings.coordinator_url,
+        wallet, did = await obj.register(
+            pool=pool,
+            trustee_store=trustee_store,
+            trustee_did=trustee_did,
+            metrics=metrics,
+            coordinator_url=coordinator_url,
+            endorser_store=endorser_store,
+            endorser_did=endorser_did_val,
         )
-    for data in bales_all[worker_id::concurrency]:
-        bale = Bale.from_json(data, settings.wallet_key, counter=0)
-        bale._seed = _seed_from_id(data["id"])
-        await bale.register(
-            pool, trustee_store, trustee_did, metrics,
-            coordinator_url=settings.coordinator_url,
-        )
+        registry[obj.entity_id] = (wallet, did)
 
+    return registry
 
-async def _run_real_data(settings, pool, trustee_store, trustee_did, metrics) -> None:
-    """Registra entidades reais com N workers concorrentes (CONCURRENCY)."""
-    data_dir = Path(settings.data_dir)
-    armazens = load_jsonl(data_dir / "armazens.json")
-    bales    = load_jsonl(data_dir / "bales.json")
-
-    logger.info(
-        f"Dados reais | armazens={len(armazens)} bales={len(bales)} "
-        f"concorrência={settings.concurrency}"
-    )
-
-    await asyncio.gather(*[
-        _worker(i, settings.concurrency, armazens, bales,
-                settings, pool, trustee_store, trustee_did, metrics)
-        for i in range(settings.concurrency)
-    ])
-
-
-async def _run_synthetic(settings, pool, trustee_store, trustee_did, metrics) -> None:
-    """Registra entidades a partir dos JSON sintéticos em MODELS_DIR (legado)."""
-    models_dir = Path(settings.models_dir)
-
-    ubas_data = load_jsonl(models_dir / "ubas.json")
-    logger.info(f"Registrando {len(ubas_data)} UBA(s)...")
-    for i, data in enumerate(ubas_data, start=1):
-        uba = UBA.from_json(data, settings.wallet_key, counter=i)
-        await uba.register(
-            pool, trustee_store, trustee_did, metrics,
-            coordinator_url=settings.coordinator_url,
-        )
-
-    bales_data = load_jsonl(models_dir / "bales.json")
-    logger.info(f"Registrando {len(bales_data)} Bale(s)...")
-    for i, data in enumerate(bales_data, start=1):
-        bale = Bale.from_json(data, settings.wallet_key, counter=i)
-        await bale.register(
-            pool, trustee_store, trustee_did, metrics,
-            coordinator_url=settings.coordinator_url,
-        )
-
-
-# ── Fluxo principal ───────────────────────────────────────────────────────────
 
 async def run() -> None:
     settings = load_settings()
@@ -252,21 +140,10 @@ async def run() -> None:
     logger.info(f"Pool:    {settings.genesis_url}")
     logger.info(f"Modelos: {settings.models_dir}")
 
-    # ── Modo de operação ──────────────────────────────────────────────────────
-    #
-    # COTTON-NET (coordinator_url configurado):
-    #   Transações passam pelo cluster RAFT antes de atingir o ledger Indy.
-    #   Wallet e DID ainda são gerados localmente; o NYM é submetido pelo
-    #   Coordinator após quórum entre os supernodos.
-    #
-    # Direto (legado COTTONTRUST):
-    #   submit_nym() chamado diretamente via indy-vdr, sem consenso externo.
-    #
     if settings.coordinator_url:
         logger.info(f"Modo:    COORDINATOR — {settings.coordinator_url}")
-        pool          = None
-        trustee_store = None
-        trustee_did   = ""
+        pool = trustee_store = None
+        trustee_did = ""
     else:
         logger.info("Modo:    DIRETO (Indy ledger)")
         pool = await open_pool(settings.genesis_url)
@@ -274,34 +151,74 @@ async def run() -> None:
 
     logger.info("=" * 60)
 
-    # Inicializa métricas — pool_name derivado do hostname do genesis URL
     pool_name = urllib.parse.urlparse(settings.genesis_url).hostname or "sandbox"
-    metrics = MetricsCollector(
-        pool_name=pool_name,
-        output_path=settings.metrics_output,
-    )
+    metrics = MetricsCollector(pool_name=pool_name, output_path=settings.metrics_output)
+    models = Path(settings.models_dir)
+    wk = settings.wallet_key
 
-    if settings.data_dir:
-        await _run_real_data(settings, pool, trustee_store, trustee_did, metrics)
-    else:
-        await _run_synthetic(settings, pool, trustee_store, trustee_did, metrics)
+    common = dict(pool=pool, trustee_store=trustee_store, trustee_did=trustee_did,
+                  metrics=metrics, coordinator_url=settings.coordinator_url)
+
+    # Nivel 1 — Entidades (endorser: trustee)
+    entidades_data = load_json(models / "entidades.json")
+    logger.info(f"Registrando {len(entidades_data)} Entidade(s)...")
+    entidade_reg = await register_all(entidades_data, Entidade, wk, **common,
+                                      endorser_registry={}, parent_id_field=None)
+
+    # Nivel 2 — Fazendas (endorser: trustee — id_entidade ausente nos dados)
+    fazendas_data = load_json(models / "fazendas.json")
+    logger.info(f"Registrando {len(fazendas_data)} Fazenda(s)...")
+    fazenda_reg = await register_all(fazendas_data, Fazenda, wk, **common,
+                                     endorser_registry={}, parent_id_field=None)
+
+    # Nivel 3 — Setores (endorser: Fazenda via id_fazenda)
+    setores_data = load_json(models / "setores.json")
+    logger.info(f"Registrando {len(setores_data)} Setor(es)...")
+    setor_reg = await register_all(setores_data, Setor, wk, **common,
+                                   endorser_registry=fazenda_reg,
+                                   parent_id_field="id_fazenda")
+
+    # Nivel 4 — Talhoes (endorser: Setor via id_setor)
+    talhoes_data = load_json(models / "talhoes.json")
+    logger.info(f"Registrando {len(talhoes_data)} Talhao(es)...")
+    talhao_reg = await register_all(talhoes_data, Talhao, wk, **common,
+                                    endorser_registry=setor_reg,
+                                    parent_id_field="id_setor")
+
+    # Nivel 5 — Armazens (endorser: trustee)
+    armazens_data = load_json(models / "armazens.json")
+    logger.info(f"Registrando {len(armazens_data)} Armazem(ns)...")
+    armazem_reg = await register_all(armazens_data, Armazem, wk, **common,
+                                     endorser_registry={}, parent_id_field=None)
+
+    # Nivel 6 — Lotes MP (endorser: Armazem via id_armazem)
+    lotes_data = load_json(models / "lotes_mp.json")
+    logger.info(f"Registrando {len(lotes_data)} Lote(s) MP...")
+    await register_all(lotes_data, LoteMP, wk, **common,
+                       endorser_registry=armazem_reg,
+                       parent_id_field="id_armazem")
+
+    # Nivel 7 — Fardinhos (endorser: trustee — sem id_armazem nos dados)
+    fardinhos_data = load_json(models / "fardinhos.json")
+    logger.info(f"Registrando {len(fardinhos_data)} Fardinho(s)...")
+    await register_all(fardinhos_data, Fardinho, wk, **common,
+                       endorser_registry={}, parent_id_field=None)
 
     # No modo coordinator, aguarda a fila FSM esvaziar antes de encerrar,
     # garantindo que o tempo total inclui a escrita efetiva em todos os supernodos.
     if settings.coordinator_url:
         await wait_for_drain(settings.coordinator_url)
 
-    # Exporta métricas e exibe resumo
     metrics.save()
     summary = metrics.summary
 
     logger.info("=" * 60)
-    logger.info("COTTONTRUST concluído")
-    logger.info(f"Transações:  {summary.get('total_transactions', 0)}")
+    logger.info("COTTONTRUST concluido")
+    logger.info(f"Transacoes:  {summary.get('total_transactions', 0)}")
     logger.info(f"Tempo total: {summary.get('total_time_sec', 0)}s")
-    logger.info(f"Média/tx:    {summary.get('avg_time_sec', 0)}s")
-    logger.info(f"Mín/tx:      {summary.get('min_time_sec', 0)}s")
-    logger.info(f"Máx/tx:      {summary.get('max_time_sec', 0)}s")
+    logger.info(f"Media/tx:    {summary.get('avg_time_sec', 0)}s")
+    logger.info(f"Min/tx:      {summary.get('min_time_sec', 0)}s")
+    logger.info(f"Max/tx:      {summary.get('max_time_sec', 0)}s")
     logger.info("=" * 60)
 
 
