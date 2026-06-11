@@ -180,9 +180,9 @@ services:
       - coordinator-4-output:/app/output
 
   # ── Cottonclient ─────────────────────────────────────────────────────────────
-  # CONCURRENCY controla quantos workers paralelos registram entidades.
-  # DATA_DIR aponta para o diretório com armazens.json e bales.json.
-  # Sem DATA_DIR, usa os JSON sintéticos em MODELS_DIR (modo legado).
+  # CONCURRENCY controla quantos registros sao feitos em paralelo dentro de cada nivel.
+  # COORDINATOR_URL vazio = modo direto (Indy). Preenchido = modo COTTON-NET (RAFT).
+  # Os modelos JSON estao embutidos na imagem em /app/models (client/models/ no repo).
 
   cottonclient:
     image: ${REGISTRY:-localhost:5000}/cottontrust-client:latest
@@ -198,15 +198,14 @@ services:
       TRUSTEE_SEED:     "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
       WALLET_KEY:       "${WALLET_KEY:-7h3gFmD4QZdGdzt2NDtTg3XZwXFENBa1ogAgwHBxHNpw}"
       LOG_LEVEL:        "${LOG_LEVEL:-INFO}"
-      COORDINATOR_URL:  "http://coordinator-1:8000"
-      DATA_DIR:         "/app/data"
+      COORDINATOR_URL:  "${COORDINATOR_URL:-}"
+      MODELS_DIR:       "/app/models"
       CONCURRENCY:      "${CONCURRENCY:-1}"
       METRICS_OUTPUT:   "/app/output/raw_tx_metrics.csv"
     networks: [cotton-overlay]
     volumes:
       - client-output:/app/output
       - client-wallets:/app/wallets
-      - ${DATA_DIR:-/mnt/prj/g11718038933/cotton-net_2026/data}:/app/data:ro
 
   # ── Monitoramento (baia5) ────────────────────────────────────────────────────
 

@@ -19,6 +19,7 @@ import asyncio
 import json
 import sys
 import urllib.parse
+from asyncio import Semaphore
 from pathlib import Path
 from loguru import logger
 
@@ -94,15 +95,19 @@ async def init_trustee(settings: Settings, pool):
 
 async def register_all(entities, klass, wallet_key, pool, trustee_store, trustee_did,
                        metrics, coordinator_url, endorser_registry: dict,
-                       parent_id_field: str | None = None) -> dict:
+                       parent_id_field: str | None = None,
+                       concurrency: int = 1) -> dict:
     """
     Registra uma lista de entidades e devolve um registry {entity_id: (wallet, did)}.
 
     Se parent_id_field for fornecido, busca o endorser no endorser_registry
     usando data[parent_id_field] como chave. Se nao encontrar, usa trustee.
+    Concurrency controla quantas entidades sao registradas em paralelo dentro do nivel.
     """
     registry = {}
-    for i, data in enumerate(entities, start=1):
+    sem = Semaphore(concurrency)
+
+    async def _one(i: int, data: dict) -> None:
         obj = klass.from_json(data, wallet_key, counter=i)
 
         endorser_store, endorser_did_val = None, ""
@@ -116,17 +121,19 @@ async def register_all(entities, klass, wallet_key, pool, trustee_store, trustee
                     f"— usando trustee como fallback"
                 )
 
-        wallet, did = await obj.register(
-            pool=pool,
-            trustee_store=trustee_store,
-            trustee_did=trustee_did,
-            metrics=metrics,
-            coordinator_url=coordinator_url,
-            endorser_store=endorser_store,
-            endorser_did=endorser_did_val,
-        )
+        async with sem:
+            wallet, did = await obj.register(
+                pool=pool,
+                trustee_store=trustee_store,
+                trustee_did=trustee_did,
+                metrics=metrics,
+                coordinator_url=coordinator_url,
+                endorser_store=endorser_store,
+                endorser_did=endorser_did_val,
+            )
         registry[obj.entity_id] = (wallet, did)
 
+    await asyncio.gather(*[_one(i, d) for i, d in enumerate(entities, start=1)])
     return registry
 
 
@@ -157,7 +164,8 @@ async def run() -> None:
     wk = settings.wallet_key
 
     common = dict(pool=pool, trustee_store=trustee_store, trustee_did=trustee_did,
-                  metrics=metrics, coordinator_url=settings.coordinator_url)
+                  metrics=metrics, coordinator_url=settings.coordinator_url,
+                  concurrency=settings.concurrency)
 
     # Nivel 1 — Entidades (endorser: trustee)
     entidades_data = load_json(models / "entidades.json")
