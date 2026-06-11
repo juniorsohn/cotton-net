@@ -1,67 +1,112 @@
 # entities — Entidades da cadeia produtiva
 
 Implementação do modelo COTTON-CELL: cada participante da cadeia
-do algodão é uma entidade com DID, wallet e metadados próprios.
+do algodão possui DID próprio, wallet digital, metadados e atributos
+públicos no ledger. O registro usa o padrão SSI author+endorser —
+a entidade assina seu próprio NYM e a entidade-pai countersigns.
 
 ## Hierarquia
 
 ```
 CottonCell (base.py)
-├── UBA    (uba.py)   — Unidade de Beneficiamento de Algodão
-└── Bale   (bale.py)  — Fardinho de algodão
+├── Entidade   — empresa/cooperativa produtora     (endorser: trustee)
+├── Fazenda    — propriedade rural                 (endorser: trustee)
+├── Setor      — subdivisão da fazenda             (endorser: Fazenda)
+├── Talhao     — parcela agrícola                  (endorser: Setor)
+├── Armazem    — unidade de beneficiamento (UBA)   (endorser: trustee)
+├── LoteMP     — lote de matéria-prima             (endorser: Armazem)
+└── Fardinho   — fardo individual de pluma         (endorser: trustee)
 ```
+
+## Dados públicos no ledger (ATTRIB)
+
+Cada entidade define `_public_fields` — campos não-sensíveis
+gravados como ATTRIB transaction após o NYM:
+
+| Entidade | Campos públicos |
+|---|---|
+| Entidade | `nome_razao`, `tipo_entidade`, `codigo` |
+| Fazenda | `codigo`, `descricao` |
+| Setor | `codigo`, `descricao` |
+| Talhao | `codigo`, `descricao` |
+| Armazem | `codigo`, `descricao`, `local` |
+| LoteMP | `codigo`, `peso_liquido`, `rendimento`, `status` |
+| Fardinho | `peso_bruto`, `peso_liquido`, `data_hora_producao` |
+
+Dados sensíveis (CPF, CNPJ, geolocalização) ficam apenas na wallet local.
 
 ## Como adicionar uma nova entidade
 
-1. Crie `entities/nova_entidade.py` herdando de `CottonCell`
-2. Implemente `from_json()` com os campos específicos em `metadata`
+1. Crie `entities/nova.py` herdando de `CottonCell`
+2. Implemente `from_json()` com `metadata` e `_public_fields`
 3. Implemente `register()` chamando `self.setup()`
-4. Importe e use em `main.py`
+4. Exporte em `__init__.py` e use em `main.py`
 
 ```python
+from dataclasses import dataclass
+from loguru import logger
 from entities.base import CottonCell
-from core.identity import create_seed
+from cottontrust_core.identity import create_seed
 
 @dataclass
-class Farm(CottonCell):
+class Nova(CottonCell):
 
     @classmethod
-    def from_json(cls, data, wallet_key, counter):
-        farm = cls(
+    def from_json(cls, data: dict, wallet_key: str, counter: int) -> "Nova":
+        obj = cls(
             entity_id=str(data["id"]),
-            entity_type="farm",
+            entity_type="nova",
             wallet_key=wallet_key,
-            metadata={"nome": data["nome"], "municipio": data["municipio"]},
+            metadata={"campo": data.get("campo")},
         )
-        farm._seed = create_seed(counter, data["id"])
-        return farm
+        obj._seed = create_seed(counter, data["id"])
+        obj._public_fields = ["campo"]
+        return obj
 
-    async def register(self, pool, trustee_store, trustee_did, metrics):
-        await self.setup(pool, trustee_store, trustee_did, metrics, self._seed)
+    async def register(
+        self, pool, trustee_store, trustee_did, metrics,
+        coordinator_url=None, endorser_store=None, endorser_did="",
+    ) -> tuple:
+        await self.setup(
+            pool=pool, trustee_store=trustee_store, trustee_did=trustee_did,
+            metrics=metrics, seed=self._seed, coordinator_url=coordinator_url,
+            endorser_store=endorser_store, endorser_did=endorser_did,
+        )
+        return self.wallet, self.did
 ```
 
-## Estrutura JSON esperada
+## Estrutura JSON esperada (exemplos)
 
-### UBA (`models/ubas.json`)
+### Armazem (`models/armazens.json`)
 ```json
 {
-    "id":         "TX-001",
-    "codigo":     "USINA",
-    "descricao":  "Usina Exemplo Ltda",
+    "id":         "uuid",
+    "codigo":     "ARM-01",
+    "descricao":  "Armazém Central",
     "local":      "integrado",
-    "id_empresa": "EMP-42"
+    "id_empresa": "uuid-empresa"
 }
 ```
 
-### Bale (`models/bales.json`)
+### LoteMP (`models/lotes_mp.json`)
 ```json
 {
-    "id":                  "BL-001",
-    "id_beneficiamento":   "BEN-10",
-    "id_produto":          "PROD-3",
-    "produto_descricao":   "Algodão em Pluma",
+    "id":          "uuid",
+    "codigo":      "LMP-001",
+    "peso_liquido": 1250.0,
+    "rendimento":  38.5,
+    "status":      "beneficiado",
+    "id_armazem":  "uuid-armazem"
+}
+```
+
+### Fardinho (`models/fardinhos.json`)
+```json
+{
+    "id":                  "uuid",
     "peso_bruto":          227.5,
     "peso_liquido":        220.0,
-    "data_hora_producao":  "2021-03-15T08:30:00"
+    "data_hora_producao":  "2021-03-15T08:30:00",
+    "id_beneficiamento":   "uuid-ben"
 }
 ```
