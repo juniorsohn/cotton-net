@@ -19,6 +19,7 @@ class Fardinho(CottonCell):
                 "peso_liquido":       data.get("peso_liquido"),
                 "data_hora_producao": data.get("data_hora_producao"),
                 "id_empresa":         data.get("id_empresa"),
+                "id_armazem":         data.get("id_armazem"),
             },
         )
         f._seed = create_seed(counter, data["id"])

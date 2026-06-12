@@ -68,14 +68,18 @@ O **COTTON-NET** estende o COTTONTRUST com duas contribuições:
 ### Cadeia de endorsers SSI
 
 ```
-Entidade  ←── trustee endossa
-  └── Fazenda  ←── trustee endossa
-        └── Setor  ←── Fazenda endossa
-              └── Talhão  ←── Setor endossa
-Armazém  ←── trustee endossa
-  └── Lote MP  ←── Armazém endossa
-Fardinho  ←── trustee endossa
+trustee
+├── Entidade  ←── trustee endossa
+├── Fazenda   ←── trustee endossa  (*)
+│     └── Setor   ←── Fazenda endossa
+│           └── Talhão  ←── Setor endossa
+└── Armazém   ←── trustee endossa
+      ├── Lote MP   ←── Armazém endossa
+      └── Fardinho  ←── Armazém endossa
 ```
+
+(*) Fazenda é endossada pelo trustee pois tem personalidade jurídica independente
+(CNPJ próprio). A relação com Entidade é de filiação registrada nos metadados.
 
 Cada par NYM + ATTRIB transaction registra a identidade e os
 atributos públicos da entidade. Dados sensíveis (CPF, CNPJ,

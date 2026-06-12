@@ -11,11 +11,11 @@ a entidade assina seu próprio NYM e a entidade-pai countersigns.
 CottonCell (base.py)
 ├── Entidade   — empresa/cooperativa produtora     (endorser: trustee)
 ├── Fazenda    — propriedade rural                 (endorser: trustee)
-├── Setor      — subdivisão da fazenda             (endorser: Fazenda)
-├── Talhao     — parcela agrícola                  (endorser: Setor)
-├── Armazem    — unidade de beneficiamento (UBA)   (endorser: trustee)
-├── LoteMP     — lote de matéria-prima             (endorser: Armazem)
-└── Fardinho   — fardo individual de pluma         (endorser: trustee)
+│   └── Setor  — subdivisão da fazenda             (endorser: Fazenda)
+│       └── Talhao — parcela agrícola              (endorser: Setor)
+└── Armazem    — unidade de beneficiamento (UBA)   (endorser: trustee)
+    ├── LoteMP — lote de matéria-prima             (endorser: Armazem)
+    └── Fardinho — fardo individual de pluma       (endorser: Armazem via id_armazem)
 ```
 
 ## Dados públicos no ledger (ATTRIB)

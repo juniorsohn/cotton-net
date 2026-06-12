@@ -9,7 +9,7 @@ Fluxo de registro com cadeia de endorsers (author+endorser SSI):
     Nivel 4: Talhoes       — endossados pelo seu Setor
     Nivel 5: Armazens      — endossados pelo trustee
     Nivel 6: Lotes MP      — endossados pelo seu Armazem (id_armazem direto)
-    Nivel 7: Fardinhos     — endossados pelo trustee (sem id_armazem nos dados)
+    Nivel 7: Fardinhos     — endossados pelo seu Armazem (id_armazem via JOIN beneficiamento→lote_mp)
 
 O registro em ordem garante que o endorser ja existe no ledger
 antes de assinar o filho. O registry mapeia entity_id real -> (wallet, did)
@@ -206,11 +206,11 @@ async def run() -> None:
                        endorser_registry=armazem_reg,
                        parent_id_field="id_armazem")
 
-    # Nivel 7 — Fardinhos (endorser: trustee — sem id_armazem nos dados)
+    # Nivel 7 — Fardinhos (endorser: Armazem via id_armazem — campo enriquecido por JOIN no banco)
     fardinhos_data = load_json(models / "fardinhos.json")
     logger.info(f"Registrando {len(fardinhos_data)} Fardinho(s)...")
     await register_all(fardinhos_data, Fardinho, wk, **common,
-                       endorser_registry={}, parent_id_field=None)
+                       endorser_registry=armazem_reg, parent_id_field="id_armazem")
 
     # No modo coordinator, aguarda a fila FSM esvaziar antes de encerrar,
     # garantindo que o tempo total inclui a escrita efetiva em todos os supernodos.

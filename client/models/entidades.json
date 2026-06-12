@@ -1,1 +1,29 @@
-﻿[{"id":"ec0a97d6-775d-4550-9b78-599b8b63e787","tipo_entidade":"J","codigo":"2","nome_razao":"TOTVS","nome_razao_reduzido":"TOTVS","cpf":null,"cnpj":"00000000000000","id_empresa":"e3861b26-6376-486b-92c4-b8691028fb8f"}]
+[
+  {
+    "id":            "e3861b26-6376-486b-92c4-b8691028fb8f",
+    "tipo_entidade": "J",
+    "codigo":        "001",
+    "nome_razao":    "Cooperativa Algodoeira A",
+    "cnpj":          "00000000000001",
+    "cpf":           null,
+    "id_empresa":    "e3861b26-6376-486b-92c4-b8691028fb8f"
+  },
+  {
+    "id":            "37418272-825e-4363-9598-b1308b42cfea",
+    "tipo_entidade": "J",
+    "codigo":        "002",
+    "nome_razao":    "Cooperativa Algodoeira B",
+    "cnpj":          "00000000000002",
+    "cpf":           null,
+    "id_empresa":    "37418272-825e-4363-9598-b1308b42cfea"
+  },
+  {
+    "id":            "79d46d98-1e74-4e35-961f-7307686136b4",
+    "tipo_entidade": "J",
+    "codigo":        "003",
+    "nome_razao":    "Cooperativa Algodoeira C",
+    "cnpj":          "00000000000003",
+    "cpf":           null,
+    "id_empresa":    "79d46d98-1e74-4e35-961f-7307686136b4"
+  }
+]
