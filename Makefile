@@ -1,6 +1,6 @@
 # COTTONTRUST / COTTON-NET — Makefile
 #
-# Workflow de um experimento:
+# ── Workflow COTTON-NET (RAFT + supernodos) ───────────────────────────────────
 #   1. make swarm-init            (uma vez só)
 #   2. make von-start NODES=32    (varia entre experimentos)
 #   3. make deploy                (sobe infraestrutura — coordinators, monitoring)
@@ -9,10 +9,21 @@
 #   6. make client-stop           (encerra o client manualmente, se necessário)
 #   7. make teardown && make von-stop
 #   8. Repete a partir do passo 2 com NODES diferente
+#
+# ── Workflow COTTONTRUST Distribuído (Indy puro, multi-máquina) ───────────────
+#   1. make swarm-init            (uma vez só, compartilhado com COTTON-NET)
+#   2. make ct-config NODES=16    (gera stack YAML + docker config no Swarm)
+#   3. make ct-deploy             (sobe nós Indy + webserver distribuído)
+#   4. make ct-status             (aguarda todos os nós ficarem Running)
+#   5. make ct-client-start       (inicia o experimento)
+#   6. make ct-logs-client        (acompanha a execução)
+#   7. make ct-stop               (encerra stack e remove config)
+#   8. Repete a partir do passo 2 com NODES diferente
 
 NODES      ?= 32
 SUPERNODOS ?= 4
 STACK      ?= cottontrust
+CT_STACK   ?= ct
 SSH_USER   ?= g11718038933
 VON_DIR    ?= /mnt/prj/g11718038933/cotton-net_2026/von-network
 
@@ -58,14 +69,25 @@ help:
 	@echo "  von-status              Verifica genesis endpoints"
 	@echo "  build                   Constrói imagens Docker"
 	@echo "  push                    Envia imagens para $(REGISTRY)"
-	@echo "  deploy                  Deploy do stack no Swarm"
-	@echo "  teardown                Remove o stack"
-	@echo "  logs-client             Logs do cottonclient"
+	@echo "  deploy                  Deploy do stack COTTON-NET no Swarm"
+	@echo "  teardown                Remove o stack COTTON-NET"
+	@echo "  logs-client             Logs do cottonclient (COTTON-NET)"
 	@echo "  logs-coord NODE=N       Logs do coordinator-N"
-	@echo "  status                  Status do stack"
-	@echo "  client-start            Inicia o cottonclient (réplicas: 0 → 1)"
-	@echo "  client-stop             Para o cottonclient   (réplicas: 1 → 0)"
+	@echo "  status                  Status do stack COTTON-NET"
+	@echo "  client-start            Inicia cottonclient COTTON-NET (0 → 1)"
+	@echo "  client-stop             Para cottonclient COTTON-NET  (1 → 0)"
 	@echo "  experiment NODES=N      von-start + deploy de uma vez"
+	@echo ""
+	@echo "  ── COTTONTRUST Distribuído (Indy puro, multi-máquina) ──"
+	@echo "  ct-config   NODES=N     Gera stack YAML + docker config no Swarm"
+	@echo "  ct-deploy               Deploy do stack distribuído"
+	@echo "  ct-stop                 Remove o stack + docker config"
+	@echo "  ct-status               Status do stack distribuído"
+	@echo "  ct-genesis              Verifica genesis no webserver (cacao:9000)"
+	@echo "  ct-client-start         Inicia cottonclient distribuído (0 → 1)"
+	@echo "  ct-client-stop          Para cottonclient distribuído  (1 → 0)"
+	@echo "  ct-logs-client          Logs do cottonclient"
+	@echo "  ct-logs-web             Logs do webserver"
 	@echo ""
 
 swarm-init:
@@ -139,6 +161,49 @@ experiment: von-start deploy
 	@echo "Monitoramento: http://$(BAIA5_IP):3002"
 	@echo "Prometheus:    http://$(BAIA5_IP):9091"
 
+
+# ── COTTONTRUST Distribuído ───────────────────────────────────────────────────
+# Stack independente do COTTON-NET: nós Indy RBFT distribuídos em 4 máquinas.
+# A imagem von-network-base deve estar disponível em todas as baias (docker pull
+# ou build local antes do deploy).
+
+ct-config:
+	@chmod +x scripts/gen_cottontrust_stack.sh
+	@./scripts/gen_cottontrust_stack.sh $(NODES)
+
+ct-deploy:
+	docker stack deploy --resolve-image=never -c docker-stack-cottontrust.yml $(CT_STACK)
+
+ct-stop:
+	@echo "Removendo stack $(CT_STACK)..."
+	-docker stack rm $(CT_STACK)
+	@echo "Removendo docker config (se existir)..."
+	-docker config rm von-gen-tx-n$(NODES) 2>/dev/null || true
+	@echo "✅ Stack e config removidos."
+
+ct-status:
+	docker stack ps $(CT_STACK) --no-trunc
+
+ct-genesis:
+	@curl -sf http://$(BAIA5_IP):9000/genesis > /dev/null \
+		&& echo "✅ Genesis disponível: http://$(BAIA5_IP):9000/genesis" \
+		|| echo "❌ Genesis indisponível em $(BAIA5_IP):9000"
+
+ct-client-start:
+	docker service scale $(CT_STACK)_cottonclient=1
+
+ct-client-stop:
+	docker service scale $(CT_STACK)_cottonclient=0
+
+ct-logs-client:
+	docker service logs -f $(CT_STACK)_cottonclient
+
+ct-logs-web:
+	docker service logs -f $(CT_STACK)_webserver
+
+
 .PHONY: help swarm-init registry-start von-start von-stop von-status \
         build push deploy teardown client-start client-stop \
-        logs-client logs-coord status experiment
+        logs-client logs-coord status experiment \
+        ct-config ct-deploy ct-stop ct-status ct-genesis \
+        ct-client-start ct-client-stop ct-logs-client ct-logs-web
