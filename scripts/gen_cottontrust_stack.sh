@@ -238,7 +238,7 @@ cat <<NODE
       - node${i}-data:/home/indy/ledger
     configs:
       - source: ${CONFIG_NAME}
-        target: /usr/local/bin/von_generate_transactions
+        target: /home/indy/bin/von_generate_transactions
         mode: 0755
 NODE
 done
@@ -281,7 +281,7 @@ cat <<WEBSERVER
       - webserver-ledger:/home/indy/ledger
     configs:
       - source: ${CONFIG_NAME}
-        target: /usr/local/bin/von_generate_transactions
+        target: /home/indy/bin/von_generate_transactions
         mode: 0755
 
 WEBSERVER
