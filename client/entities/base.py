@@ -145,7 +145,7 @@ class CottonCell:
                     pool=pool,
                     store=self.wallet,
                     submitter_did=self.did,
-                    raw_attrs=public_meta,
+                    raw_attrs={self.entity_type: public_meta},
                 )
                 tx_size += attrib_size
 
