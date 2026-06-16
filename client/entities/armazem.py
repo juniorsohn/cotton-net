@@ -21,6 +21,7 @@ class Armazem(CottonCell):
         )
         a._seed = create_seed(counter, data["id"])
         a._public_fields = ["codigo", "descricao", "local"]
+        a._ledger_role = "ENDORSER"
         return a
 
     async def register(

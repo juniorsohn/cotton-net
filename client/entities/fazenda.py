@@ -21,6 +21,7 @@ class Fazenda(CottonCell):
         )
         f._seed = create_seed(counter, data["id"])
         f._public_fields = ["codigo", "descricao"]
+        f._ledger_role = "ENDORSER"
         return f
 
     async def register(

@@ -126,6 +126,7 @@ class CottonCell:
                     submitter_did=trustee_did,
                     target_did=self.did,
                     verkey=self.verkey,
+                    role=getattr(self, "_ledger_role", None),
                 )
             except RuntimeError as e:
                 if "can not touch verkey" in str(e) or "UnauthorizedClientRequest" in str(e):

@@ -22,6 +22,7 @@ class Setor(CottonCell):
         )
         s._seed = create_seed(counter, data["id"])
         s._public_fields = ["codigo", "descricao"]
+        s._ledger_role = "ENDORSER"
         return s
 
     async def register(
