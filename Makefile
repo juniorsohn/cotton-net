@@ -181,7 +181,18 @@ ct-stop:
 	-docker stack rm $(CT_STACK)
 	@echo "Removendo docker config (se existir)..."
 	-docker config rm von-gen-tx-n$(NODES) 2>/dev/null || true
-	@echo "✅ Stack e config removidos."
+	@echo "Aguardando containers encerrarem..."
+	@sleep 10
+	@echo "Removendo volumes de ledger (cacao)..."
+	-ssh $(SSH_USER)@$(BAIA5_IP) \
+		"docker volume rm $(CT_STACK)_webserver-ledger $(CT_STACK)_webserver-cli \
+		$(CT_STACK)_client-output $(CT_STACK)_client-wallets 2>/dev/null || true"
+	@echo "Removendo volumes de nós (flores/corisco/baiacu/pernambuco)..."
+	@for ip in $(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP); do \
+		ssh $(SSH_USER)@$$ip \
+			"docker volume ls -q | grep '^$(CT_STACK)_node' | xargs -r docker volume rm 2>/dev/null || true"; \
+	done
+	@echo "✅ Stack, config e volumes removidos."
 
 ct-status:
 	docker stack ps $(CT_STACK) --no-trunc
