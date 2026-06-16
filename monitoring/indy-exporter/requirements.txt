@@ -1,0 +1,4 @@
+indy-vdr>=0.3.4
+aries-askar>=0.3.2
+prometheus-client>=0.20.0
+loguru>=0.7.0

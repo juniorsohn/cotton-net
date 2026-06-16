@@ -292,3 +292,30 @@ services:
         target: /etc/grafana/provisioning/dashboards/provider.yml
       - source: grafana-dashboard-cotton
         target: /etc/grafana/dashboards/cotton-net.json
+
+  # ── Indy Validator Exporter ───────────────────────────────────────────────────
+  # Coleta métricas internas dos nós RBFT via GET_VALIDATOR_INFO e expõe em
+  # /metrics para o Prometheus. Serviço opcional: se estiver down, o Prometheus
+  # apenas marca o target como "down" sem afetar o restante do stack.
+  # GENESIS_URL aponta para o supernodo S1 (qualquer nó do pool serve).
+  indy-exporter:
+    image: ${REGISTRY:-localhost:5000}/indy-exporter:latest
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.hostname == cacao]
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+      resources:
+        limits: {cpus: '0.2', memory: 128M}
+    environment:
+      GENESIS_URL:     "http://10.10.20.151:9000/genesis"
+      TRUSTEE_DID:     "${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
+      TRUSTEE_SEED:    "${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
+      SCRAPE_INTERVAL: "30"
+      SUBMIT_TIMEOUT:  "15"
+      LOG_LEVEL:       "${LOG_LEVEL:-INFO}"
+    ports:
+      - "9309:9309"
+    networks: [cotton-overlay]

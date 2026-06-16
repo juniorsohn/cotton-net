@@ -124,12 +124,14 @@ von-status:
 	done
 
 build:
-	docker build -t $(REGISTRY)/cottontrust-client:latest     -f client/dockerfile .
-	docker build -t $(REGISTRY)/cottontrust-coordinator:latest -f coordinator/dockerfile .
+	docker build -t $(REGISTRY)/cottontrust-client:latest      -f client/dockerfile .
+	docker build -t $(REGISTRY)/cottontrust-coordinator:latest  -f coordinator/dockerfile .
+	docker build -t $(REGISTRY)/indy-exporter:latest           monitoring/indy-exporter/
 
 push: build
 	docker push $(REGISTRY)/cottontrust-client:latest
 	docker push $(REGISTRY)/cottontrust-coordinator:latest
+	docker push $(REGISTRY)/indy-exporter:latest
 
 deploy:
 	docker stack deploy --resolve-image=never -c docker-compose.yml $(STACK)

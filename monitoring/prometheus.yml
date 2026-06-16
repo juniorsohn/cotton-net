@@ -57,6 +57,14 @@ scrape_configs:
       - targets: ['baia5:9100']
         labels: {node: 'baia5', supernodo: 'monitoring'}
 
+  # Indy Validator Exporter — métricas internas dos nós RBFT (GET_VALIDATOR_INFO)
+  # Scrapes o exporter que roda na baia5 (cacao). Se o serviço estiver down,
+  # Prometheus apenas marca o target como "down" sem afetar os demais jobs.
+  - job_name: 'indy-exporter'
+    static_configs:
+      - targets: ['baia5:9309']
+        labels: {service: 'indy-exporter'}
+
   # Prometheus self-monitoring
   - job_name: 'prometheus'
     static_configs:

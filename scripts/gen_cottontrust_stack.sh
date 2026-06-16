@@ -255,6 +255,7 @@ cat <<WEBSERVER
     environment:
       - IPS=${IPS_LIST}
       - LOG_LEVEL=WARNING
+      - LEDGER_SEED=000000000000000000000000Trustee1
       - REGISTER_NEW_DIDS=True
       - LEDGER_INSTANCE_NAME=cottontrust-distributed-${TOTAL_NODES}n
       - MAX_FETCH=50000
