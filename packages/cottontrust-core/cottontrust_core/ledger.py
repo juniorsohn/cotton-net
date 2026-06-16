@@ -109,7 +109,12 @@ async def submit_nym_endorsed(
     request.set_endorser(endorser_did)
     tx_size = len(request.body.encode("utf-8"))
 
-    await _sign_request(author_store, author_did, request)
+    async with author_store.session() as session:
+        entry = await session.fetch_key(author_did)
+        if not entry:
+            raise RuntimeError(f"Chave do author nao encontrada na wallet | did={author_did}")
+        sig = entry.key.sign_message(request.signature_input)
+    request.set_multi_signature(author_did, sig)
 
     async with endorser_store.session() as session:
         entry = await session.fetch_key(endorser_did)
