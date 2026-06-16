@@ -24,7 +24,7 @@ from loguru import logger
 
 from cottontrust_core.wallet import create_wallet, store_metadata
 from cottontrust_core.identity import create_and_store_did
-from cottontrust_core.ledger import submit_nym, submit_nym_endorsed, submit_attrib
+from cottontrust_core.ledger import submit_nym, submit_attrib
 from metrics.collector import MetricsCollector
 
 
@@ -97,7 +97,24 @@ class CottonCell:
         )
         t_after_setup = time.monotonic()
 
-        # 3. Registra no ledger — coordinator, author+endorser, ou trustee direto
+        # 3. Registra no ledger — coordinator, endorser-submits, ou trustee direto
+        #
+        # Nota sobre endorsed transactions (Aries RFC 0028 / indy-vdr set_endorser):
+        # O padrão dual-assinatura (author+endorser multi-sig) exigiria que o
+        # RolesAuthorizer do indy-node encontrasse o sender (novo DID) no ledger
+        # antes de verificar as assinaturas (authorizer.py, passo 2). Como o novo
+        # DID ainda nao existe, o check falha — e nao ha como contornar isso via
+        # off_ledger_signature porque auth_constraints.py restringe esse flag a
+        # role='*' exclusivamente. O comportamento eh identico em indy-node 1.12.6
+        # e 1.13.2 (codigo-fonte verificado). O endorsed transaction RFC 0028 foi
+        # projetado para authors JA REGISTRADOS (ex.: publicar SCHEMA/CRED_DEF),
+        # nao para registrar novos DIDs via NYM.
+        #
+        # Padrao adotado (endorser-submits):
+        #   NYM: identifier=endorser_did -> prova quem autorizou o registro
+        #   ATTRIB: identifier=self.did  -> prova que o filho controla a chave
+        #   ATTRIB raw: endorser_did=endorser_did -> link explicito na cadeia
+        # Ambas as transacoes ficam imutaveis no ledger, formando a cadeia SSI.
         tx_size = 0
         if coordinator_url:
             from coordinator import register_entity
@@ -109,15 +126,20 @@ class CottonCell:
                 verkey=self.verkey,
             )
         elif endorser_store and endorser_did:
-            _, tx_size = await submit_nym_endorsed(
-                pool=pool,
-                author_store=self.wallet,
-                author_did=self.did,
-                endorser_store=endorser_store,
-                endorser_did=endorser_did,
-                target_did=self.did,
-                verkey=self.verkey,
-            )
+            try:
+                _, tx_size = await submit_nym(
+                    pool=pool,
+                    store=endorser_store,
+                    submitter_did=endorser_did,
+                    target_did=self.did,
+                    verkey=self.verkey,
+                    role=getattr(self, "_ledger_role", None),
+                )
+            except RuntimeError as e:
+                if "can not touch verkey" in str(e) or "UnauthorizedClientRequest" in str(e):
+                    logger.debug(f"DID já registrado no ledger, ignorando | did={self.did}")
+                else:
+                    raise
         else:
             try:
                 _, tx_size = await submit_nym(

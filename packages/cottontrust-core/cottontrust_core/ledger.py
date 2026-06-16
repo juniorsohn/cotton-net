@@ -92,11 +92,23 @@ async def submit_nym_endorsed(
     role: str | None = None,
 ) -> tuple[dict, int]:
     """
-    Constrói, assina e submete um NYM com padrão author+endorser.
+    Constrói, assina e submete um NYM com padrão author+endorser (Aries RFC 0028).
 
-    O author (entidade) assina provando posse da chave.
-    O endorser (pai na cadeia) countersigns dando permissão de escrita.
-    Implementa rastreabilidade de proveniência via assinatura encadeada.
+    AVISO — limitação arquitetural do indy-node (verificado em 1.12.6 e 1.13.2):
+    Este padrão (dual-assinatura: author=novo DID + endorser=ENDORSER registrado)
+    NAO funciona para registrar novos DIDs via NYM. O RolesAuthorizer do indy-node
+    (authorizer.py, passo 2) rejeita a transação com "sender's DID not found in the
+    Ledger" antes de avaliar as assinaturas, porque o autor ainda nao existe no
+    ledger. O flag off_ledger_signature que suprimiria esse check nao pode ser
+    aplicado a constraints de role especifico (restricao em auth_constraints.py).
+
+    Este metodo funciona corretamente para transacoes onde o AUTHOR JA EXISTE no
+    ledger e precisa de endosso de um ENDORSER para publicar SCHEMA, CRED_DEF ou
+    ATTRIB — o caso de uso original do RFC 0028.
+
+    Para registro de novos DIDs via NYM na cadeia hierarquica do COTTONTRUST,
+    use submit_nym() com endorser_store/endorser_did como submitter (padrao
+    endorser-submits implementado em entities/base.py).
     """
     request = indy_vdr.ledger.build_nym_request(
         submitter_did=author_did,
