@@ -116,11 +116,6 @@ while getopts \$options option; do
     esac
 done
 
-nodeArg=""
-if [ -n "\$nodeNum" ]; then
-    nodeArg="--nodeNum \$nodeNum"
-fi
-
 if [ -n "\$ipAddresses" ]; then
     ipsArg="\$ipAddresses"
 elif [ -n "\$ipAddress" ]; then
@@ -133,11 +128,11 @@ else
 fi
 
 echo "Gerando genesis | nodes=${TOTAL_NODES} ips=\${ipsArg}"
-generate_indy_pool_transactions \\
-    --nodes ${TOTAL_NODES} \\
-    --clients 0 \\
-    \$nodeArg \\
-    --ips "\$ipsArg"
+if [ -n "\$nodeNum" ]; then
+    generate_indy_pool_transactions --nodes ${TOTAL_NODES} --clients 0 --nodeNum "\$nodeNum" --ips "\$ipsArg"
+else
+    generate_indy_pool_transactions --nodes ${TOTAL_NODES} --clients 0 --ips "\$ipsArg"
+fi
 GENSCRIPT
 )
 
