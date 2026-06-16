@@ -65,7 +65,7 @@ def load_json(path: Path) -> list[dict]:
     if not path.exists():
         logger.warning(f"Arquivo nao encontrado: {path}")
         return []
-    content = path.read_text(encoding="utf-8").strip()
+    content = path.read_text(encoding="utf-8-sig").strip()
     if not content or content == "null":
         return []
     parsed = json.loads(content)
