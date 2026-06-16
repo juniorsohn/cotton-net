@@ -126,6 +126,9 @@ class CottonCell:
                 verkey=self.verkey,
             )
         elif endorser_store and endorser_did:
+            # Passo A: endorser (pai) registra o filho como IDENTITY_OWNER.
+            # auth_map: add_new_endorser exige STEWARD/TRUSTEE — um ENDORSER
+            # nao pode conceder role=ENDORSER a outro DID. Por isso role=None aqui.
             try:
                 _, tx_size = await submit_nym(
                     pool=pool,
@@ -133,13 +136,34 @@ class CottonCell:
                     submitter_did=endorser_did,
                     target_did=self.did,
                     verkey=self.verkey,
-                    role=getattr(self, "_ledger_role", None),
+                    role=None,
                 )
             except RuntimeError as e:
                 if "can not touch verkey" in str(e) or "UnauthorizedClientRequest" in str(e):
                     logger.debug(f"DID já registrado no ledger, ignorando | did={self.did}")
                 else:
                     raise
+
+            # Passo B: Trustee concede role=ENDORSER se a entidade precisa
+            # endossar filhos (ex.: Setor endossa Talhões). Apenas STEWARD/TRUSTEE
+            # podem fazer isso (auth_map: add_new_endorser / edit_role → ENDORSER).
+            ledger_role = getattr(self, "_ledger_role", None)
+            if ledger_role and trustee_store and trustee_did:
+                try:
+                    _, role_tx = await submit_nym(
+                        pool=pool,
+                        store=trustee_store,
+                        submitter_did=trustee_did,
+                        target_did=self.did,
+                        verkey=self.verkey,
+                        role=ledger_role,
+                    )
+                    tx_size += role_tx
+                except RuntimeError as e:
+                    if "can not touch verkey" in str(e):
+                        logger.debug(f"Role já atribuído, ignorando | did={self.did}")
+                    else:
+                        raise
         else:
             try:
                 _, tx_size = await submit_nym(
