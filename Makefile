@@ -24,6 +24,7 @@ NODES      ?= 32
 SUPERNODOS ?= 4
 STACK      ?= cottontrust
 CT_STACK   ?= ct
+CN_STACK   ?= cn
 SSH_USER   ?= g11718038933
 VON_DIR    ?= /mnt/prj/g11718038933/cotton-net_2026/von-network
 
@@ -62,7 +63,9 @@ help:
 	@echo "  swarm-init              Inicializa Docker Swarm"
 	@echo "  registry-start          Sobe registry em $(BAIA1_IP):5000"
 	@echo "  von-config  NODES=N     Gera start_nodes.sh no NFS (roda uma vez)"
-	@echo "  von-local-start         Rebuild + start-combined na baia atual"
+	@echo "  von-patch               Patcha von-network-base: limite 100 → 10000 nós"
+	@echo "  von-local-build         Build + patch da imagem (sem iniciar rede)"
+	@echo "  von-local-start         Rebuild + patch + start na baia atual"
 	@echo "  von-local-stop          Para o supernodo local"
 	@echo "  von-start   NODES=N     von-config + instrução para cada baia"
 	@echo "  von-stop                Para todos os VON Networks via SSH"
@@ -89,6 +92,17 @@ help:
 	@echo "  ct-logs-client          Logs do cottonclient"
 	@echo "  ct-logs-web             Logs do webserver"
 	@echo ""
+	@echo "  ── COTTON-NET Distribuído (Indy fragmentado, RAFT entre super-nós) ──"
+	@echo "  cn-config   NODES=N SUPERNODOS=S  Gera stack YAML + docker configs"
+	@echo "  cn-deploy               Deploy do stack COTTON-NET distribuído"
+	@echo "  cn-stop                 Remove stack + configs + volumes"
+	@echo "  cn-status               Status do stack COTTON-NET distribuído"
+	@echo "  cn-genesis              Verifica genesis de cada baia (S_n×:9000)"
+	@echo "  cn-client-start         Inicia cottonclient COTTON-NET (0 → 1)"
+	@echo "  cn-client-stop          Para cottonclient COTTON-NET  (1 → 0)"
+	@echo "  cn-logs-client          Logs do cottonclient"
+	@echo "  cn-logs-coord NODE=N    Logs do coordinator-N"
+	@echo ""
 
 swarm-init:
 	@chmod +x scripts/swarm_init.sh && ./scripts/swarm_init.sh
@@ -102,8 +116,20 @@ von-config:
 	@chmod +x scripts/start_von.sh
 	@./scripts/start_von.sh $(NODES) $(SUPERNODOS)
 
+von-patch:
+	@# Aplica patch no limite de nós do indy-plenum (100 → 10000) na imagem local.
+	@# Requer que von-network-base já exista (make von-local-build ou ./manage build).
+	@chmod +x scripts/patch_von_image.sh && ./scripts/patch_von_image.sh
+
+von-local-build:
+	@# Reconstrói von-network-base na baia atual e aplica o patch indy-plenum.
+	@# Para o fluxo CN distribuído: rodar em cada baia antes de make cn-deploy.
+	@echo "🔧 Build von-network-base..."
+	@cd $(VON_DIR) && DOCKER_API_VERSION=1.41 ./manage build
+	@$(MAKE) von-patch
+
 von-local-start:
-	@# Roda na baia atual: rebuild + ./manage start <IP local>
+	@# Roda na baia atual: rebuild + patch + ./manage start <IP local>
 	@$(VON_DIR)/von_local_start.sh
 
 von-local-stop:
@@ -215,8 +241,66 @@ ct-logs-web:
 	docker service logs -f $(CT_STACK)_webserver
 
 
-.PHONY: help swarm-init registry-start von-start von-stop von-status \
+# ── COTTON-NET Distribuído ────────────────────────────────────────────────────
+# K_n nós de cada super-nó distribuídos pelas 4 baias — mesma régua do CT.
+# Garante que a comunicação Indy interna percorre a rede física, não localhost.
+
+cn-config:
+	@chmod +x scripts/gen_cottonnet_stack.sh
+	@./scripts/gen_cottonnet_stack.sh $(NODES) $(SUPERNODOS)
+
+cn-deploy:
+	docker stack deploy --resolve-image=never -c docker-stack-cottonnet.yml $(CN_STACK)
+
+cn-stop:
+	@echo "Removendo stack $(CN_STACK)..."
+	-docker stack rm $(CN_STACK)
+	@echo "Aguardando containers encerrarem..."
+	@sleep 10
+	@echo "Removendo docker configs..."
+	@for s in $$(seq 1 $(SUPERNODOS)); do \
+		docker config rm "cn-gen-tx-sn$${s}-kn$$(( $(NODES) / $(SUPERNODOS) ))"    2>/dev/null || true; \
+		docker config rm "cn-start-node-sn$${s}-kn$$(( $(NODES) / $(SUPERNODOS) ))" 2>/dev/null || true; \
+	done
+	@echo "Removendo volumes das baias..."
+	@for ip in $(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP) $(BAIA5_IP); do \
+		ssh $(SSH_USER)@$$ip \
+			"docker volume ls -q | grep '^$(CN_STACK)_' | xargs -r docker volume rm 2>/dev/null || true"; \
+	done
+	@echo "✅ Stack, configs e volumes removidos."
+
+cn-status:
+	docker stack ps $(CN_STACK) --no-trunc
+	@echo ""
+	docker stack services $(CN_STACK)
+
+cn-genesis:
+	@echo "Verificando genesis dos super-nós (cada baia:9000)..."
+	@for ip in $(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP); do \
+		curl -sf http://$$ip:9000/genesis > /dev/null \
+			&& echo "  ✅ http://$$ip:9000/genesis" \
+			|| echo "  ❌ http://$$ip:9000/genesis"; \
+	done
+
+cn-client-start:
+	docker service scale $(CN_STACK)_cottonclient=1
+
+cn-client-stop:
+	docker service scale $(CN_STACK)_cottonclient=0
+
+cn-logs-client:
+	docker service logs -f $(CN_STACK)_cottonclient
+
+cn-logs-coord:
+	docker service logs -f $(CN_STACK)_coordinator-$(NODE)
+
+
+.PHONY: help swarm-init registry-start \
+        von-config von-patch von-local-build von-local-start von-local-stop \
+        von-start von-stop von-status \
         build push deploy teardown client-start client-stop \
         logs-client logs-coord status experiment \
         ct-config ct-deploy ct-stop ct-status ct-genesis \
-        ct-client-start ct-client-stop ct-logs-client ct-logs-web
+        ct-client-start ct-client-stop ct-logs-client ct-logs-web \
+        cn-config cn-deploy cn-stop cn-status cn-genesis \
+        cn-client-start cn-client-stop cn-logs-client cn-logs-coord

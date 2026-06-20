@@ -2,8 +2,9 @@
 
 Árbitro da camada externa de consenso do COTTON-NET.
 
-Cada instância roda em uma máquina física junto com um Supernodo
-Indy (VON Network). O conjunto forma um nó Sn da arquitetura.
+Cada instância coordena um supernodo Indy (VON Network) via RAFT.
+No modo distribuído (`cn-*`), o coordinator pode rodar em qualquer
+baia com acesso de rede ao genesis do seu supernodo.
 
 ## Responsabilidades
 
@@ -34,15 +35,19 @@ Indy (VON Network). O conjunto forma um nó Sn da arquitetura.
 | `NODE_NUM` | ID numérico inteiro (raftify) | `1` |
 | `RAFT_ADDR` | Endereço RAFT deste nó | `0.0.0.0:60061` |
 | `RAFT_PEERS` | Endereços dos outros nós | `node-2:60061,node-3:60061` |
-| `GENESIS_URL` | Genesis do supernodo Indy local | `http://s1:9000/genesis` |
+| `GENESIS_URL` | Genesis do supernodo Indy associado | `http://10.10.20.151:9000/genesis` |
 | `TRUSTEE_SEED` | Seed do trustee | `000000000000000000000000Trustee1` |
 | `TRUSTEE_DID` | DID do trustee | `V4SGRU86Z58d6TV7PBUe6f` |
 | `WALLET_KEY` | Chave das wallets | `changeme` |
 | `API_PORT` | Porta da API HTTP | `8000` |
 
+No modo distribuído (`make cn-config`), todos esses valores são injetados
+automaticamente no `docker-stack-cottonnet.yml` gerado.
+
 ## Execução local (desenvolvimento)
 
 ```bash
+pip install -e ../packages/cottontrust-core
 pip install -r requirements.txt
 
 # Nó único sem peers — suficiente para desenvolvimento
@@ -96,7 +101,7 @@ coordinator/
 ├── main.py         # FastAPI + ciclo de vida (raftify, trustee, pending)
 ├── fsm.py          # CoordinatorFSM: RAFT commit → submit_nym no Indy local
 ├── log_entry.py    # NymLogEntry (encode/decode para o log RAFT)
-├── supernodes.py   # SupernodeRegistry — conexão com o Indy local
+├── supernodes.py   # SupernodeRegistry — conexão com o Indy do supernodo
 └── pending.py      # PendingQueue — retry com backoff (consistência eventual)
 ```
 

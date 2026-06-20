@@ -1,7 +1,7 @@
 # COTTON-NET — Guia de Utilização
 
-Guia operacional completo: setup de ambiente, distribuição entre
-máquinas, fluxo de experimento e monitoramento.
+Guia operacional completo: setup de ambiente, fluxos de experimento e
+monitoramento para os três modos suportados.
 
 ---
 
@@ -9,94 +9,103 @@ máquinas, fluxo de experimento e monitoramento.
 
 1. [Topologia física](#1-topologia-física)
 2. [Pré-requisitos](#2-pré-requisitos)
-3. [Setup único (primeira execução)](#3-setup-único-primeira-execução)
+3. [Setup único](#3-setup-único)
 4. [Configuração do ambiente](#4-configuração-do-ambiente)
-5. [Fluxo de experimento](#5-fluxo-de-experimento)
-6. [Monitoramento](#6-monitoramento)
-7. [Referência de comandos](#7-referência-de-comandos)
-8. [Variáveis de ambiente](#8-variáveis-de-ambiente)
-9. [Solução de problemas](#9-solução-de-problemas)
+5. [Modo A — COTTONTRUST Distribuído (baseline)](#5-modo-a--cottontrust-distribuído-baseline)
+6. [Modo B — COTTON-NET Distribuído (principal)](#6-modo-b--cotton-net-distribuído-principal)
+7. [Monitoramento](#7-monitoramento)
+8. [Referência de comandos](#8-referência-de-comandos)
+9. [Variáveis de ambiente](#9-variáveis-de-ambiente)
+10. [Solução de problemas](#10-solução-de-problemas)
 
 ---
 
 ## 1. Topologia física
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│  baia1              baia2              baia3              baia4       │
-│                                                                       │
-│  coordinator-1      coordinator-2      coordinator-3      coordinator-4│
-│  :8001 (API HTTP)   :8002              :8003              :8004       │
-│  :60061 (RAFT)      :60061             :60061             :60061      │
-│                                                                       │
-│  VON Network S1     VON Network S2     VON Network S3     VON Network S4│
-│  :9000 (genesis)    :9000              :9000              :9000       │
-│  Kn nós Indy/RBFT   Kn nós Indy/RBFT   Kn nós Indy/RBFT  Kn nós Indy/RBFT│
-│                                                                       │
-│  ◄──────────────── RAFT cluster (overlay Docker) ──────────────────► │
-│                                                                       │
-├──────────────────────────────────────────────────────────────────────┤
-│  baia5                                                                │
-│                                                                       │
-│  cottonclient    → POST /register → coordinator-1 → RAFT → Indy×4   │
-│  prometheus      :9090                                                │
-│  grafana         :3000                                                │
-│  cadvisor        :8080   (mode: global — roda em todas as baias)     │
-└──────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  flores (10.10.20.151)   — Worker Swarm                         │
+│  corisco (10.10.20.152)  — Worker Swarm                         │
+│  baiacu (10.10.20.153)   — Worker Swarm                         │
+│  pernambuco (10.10.20.154) — Worker Swarm                       │
+│                                                                  │
+│  Cada baia recebe NPM = Kn / 4 nós Indy por supernodo           │
+│  (Kn = NODES / SUPERNODOS; mínimo Kn=4 pelo quórum RBFT)        │
+├─────────────────────────────────────────────────────────────────┤
+│  cacao (10.10.20.155)    — Manager Swarm                        │
+│                                                                  │
+│  coordinator-1..4  :8001-8004  (COTTON-NET)                     │
+│  cottonclient                                                    │
+│  prometheus        :9090                                         │
+│  grafana           :3000                                         │
+│  cadvisor          :8080   (mode: global — roda em todas)       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**Kn** = número de nós Indy por supernodo = `NODES / 4`.
-Mínimo: `Kn = 4` (exigência do PBFT do Hyperledger Indy), ou seja, `NODES ≥ 16`.
+NFS compartilhado em todas as baias:
+`/mnt/prj/g11718038933/cotton-net_2026/von-network`
 
 ---
 
 ## 2. Pré-requisitos
 
-### Em todas as baias (baia1–baia5)
+### Em todas as baias
 
 ```bash
-# Docker Engine >= 24
-docker --version
-
-# Python 3.10+ (apenas em baia5 para execução local, opcional)
-python3 --version
+docker --version          # >= 24
 ```
 
-### Em baia1–baia4 (supernodos)
+### Em flores (manager / registry)
 
 ```bash
-# von-network clonado e construído
-git clone https://github.com/bcgov/von-network /home/indy/von-network
-cd /home/indy/von-network
-./manage build
+# Repositório clonado
+ls /mnt/prj/g11718038933/cotton-net_2026/cottonnet/
+
+# von-network disponível no NFS
+ls /mnt/prj/g11718038933/cotton-net_2026/von-network/manage
 ```
 
+### Imagem von-network-base (todas as baias)
+
+A imagem `von-network-base` deve estar disponível localmente em cada baia
+que executará nós Indy. Construa uma vez (o build usa o NFS, portanto pode
+ser executado de qualquer baia):
+
+```bash
+cd /mnt/prj/g11718038933/cotton-net_2026/von-network
+DOCKER_API_VERSION=1.41 ./manage build
+```
+
+Para experimentos com `Kn > 100`, aplique o patch do Indy Plenum após o build:
+
+```bash
+# A partir do diretório do repositório cottonnet/:
+make von-patch
+```
+
+O patch substitui o limite artificial de 100 nós por 10000 na imagem local.
+É idempotente e inócuo para `Kn ≤ 100`.
 
 ---
 
-## 3. Setup único (primeira execução)
+## 3. Setup único
 
-Execute **uma única vez**, de baia1:
+Execute uma única vez, de qualquer nó com acesso ao cluster:
 
 ```bash
-cd /path/to/cottonnet
+cd /mnt/prj/g11718038933/cotton-net_2026/cottonnet/
 
-# 1. Inicializa Docker Swarm
-#    baia1 = manager | baia2, baia3, baia4, baia5 = workers
+# 1. Inicializa Docker Swarm (flores = manager, demais = workers)
 make swarm-init
 
-# Verifica os nós
+# Verifica os nós:
 docker node ls
-# ID         HOSTNAME  STATUS  AVAILABILITY  MANAGER STATUS
-# xxx *      baia1     Ready   Active        Leader
-# yyy        baia2     Ready   Active
-# zzz        baia3     Ready   Active
-# www        baia4     Ready   Active
-# vvv        baia5     Ready   Active
 
-# 2. Sobe registry Docker local em baia1:5000
-#    Todos os nós do Swarm usam esse registry para puxar as imagens
+# 2. Sobe o registry Docker local em flores:5000
 make registry-start
+
+# 3. Constrói e envia as imagens do projeto
+make push
 ```
 
 ---
@@ -107,248 +116,248 @@ make registry-start
 cp .env.example .env
 ```
 
-Edite `.env` com os valores do seu ambiente. Os valores abaixo
-funcionam com o VON Network padrão (Trustee1):
-
 ```env
-GENESIS_URL=http://baia1:9000/genesis    # usado apenas no modo direto
 TRUSTEE_SEED=000000000000000000000000Trustee1
 TRUSTEE_DID=V4SGRU86Z58d6TV7PBUe6f
 WALLET_KEY=changeme_em_producao
 LOG_LEVEL=INFO
-# COORDINATOR_URL já definido no docker-compose para modo COTTON-NET
 ```
 
-> `COORDINATOR_URL` já está configurado como `http://coordinator-1:8000`
-> no `docker-compose.yml`. Não é necessário definir no `.env` para o deploy
-> via Swarm — só para execução local do client.
+`GENESIS_URL` e `COORDINATOR_URL` são injetados automaticamente no
+docker-stack gerado — não é necessário defini-los no `.env` para
+experimentos via Swarm.
 
 ---
 
-## 5. Fluxo de experimento
+## 5. Modo A — COTTONTRUST Distribuído (baseline)
 
-O fluxo completo de um experimento é:
+Pool Indy RBFT único com N nós distribuídos pelas 4 baias via Docker Swarm.
+Sem camada RAFT. Serve como baseline de comparação para o COTTON-NET.
 
-```
-von-start → build → push → deploy → [observar] → teardown → von-stop
-```
-
-### 5.1 Iniciar os VON Networks (supernodos Indy)
+### 5.1 Gerar o stack
 
 ```bash
-# Kn = NODES / 4 nós Indy por supernodo
-# Experimentos sugeridos: NODES = 16 (Kn=4), 32 (Kn=8), 64 (Kn=16)
-
-make von-start NODES=32
+# NODES = total de nós Indy (mínimo 4, deve ser múltiplo de 4)
+make ct-config NODES=16
 ```
 
-O script conecta via SSH em paralelo para baia1–baia4, inicia os VON
-Networks e aguarda cada genesis endpoint responder antes de continuar.
-Saída esperada:
+O comando gera `docker-stack-cottontrust.yml` e injeta uma Docker Config
+com o script `von_generate_transactions` customizado para N nós.
 
-```
-╔══════════════════════════════════════════════════════╗
-║         COTTON-NET — VON Network Setup               ║
-║  Total de nós:    32                                  ║
-║  Supernodos (Sn): 4                                   ║
-║  Nós por Sn (Kn): 8                                   ║
-╚══════════════════════════════════════════════════════╝
-
-⏳ Aguardando genesis endpoints...
-   S1 (http://baia1:9000/genesis) ......... ✅
-   S2 (http://baia2:9000/genesis) ......... ✅
-   S3 (http://baia3:9000/genesis) ......... ✅
-   S4 (http://baia4:9000/genesis) ......... ✅
-
-✅ Todos os 4 supernodos prontos!
-```
-
-Verificação rápida após o início:
+### 5.2 Deploy
 
 ```bash
-make von-status
-#   ✅ http://baia1:9000/genesis
-#   ✅ http://baia2:9000/genesis
-#   ✅ http://baia3:9000/genesis
-#   ✅ http://baia4:9000/genesis
+make ct-deploy
 ```
 
-### 5.2 Build e push das imagens
+Sobe os serviços:
+- `webserver`: em cacao, porta 9000 — serve o genesis
+- `node-1` .. `node-N`: distribuídos pelas 4 baias, `mode: host` (portas 9701+)
+- `cottonclient`: em cacao, réplicas=0 (aguarda `ct-client-start`)
+
+Aguarde os nós ficarem Running:
 
 ```bash
-make push
-# Constrói localmente e envia para baia1:5000
-# (necessário apenas quando há alterações no código)
+make ct-status
 ```
 
-### 5.3 Deploy do stack
+Verifique o genesis:
 
 ```bash
-make deploy
-# docker stack deploy -c docker-compose.yml cottontrust
+make ct-genesis
+#   ✅ Genesis disponível: http://10.10.20.155:9000/genesis
 ```
 
-Após o deploy, o RAFT precisa de ~10–30s para eleger o líder.
-Acompanhe com:
+### 5.3 Executar o experimento
 
 ```bash
-make status
-# ID    NAME                           NODE   STATE    PORTS
-# ...   cottontrust_coordinator-1      baia1  Running  *:8001->8000/tcp
-# ...   cottontrust_coordinator-2      baia2  Running  *:8002->8000/tcp
-# ...   cottontrust_coordinator-3      baia3  Running  *:8003->8000/tcp
-# ...   cottontrust_coordinator-4      baia4  Running  *:8004->8000/tcp
-# ...   cottontrust_cottonclient       baia5  Running
-# ...   cottontrust_prometheus         baia5  Running  *:9090->9090/tcp
-# ...   cottontrust_grafana            baia5  Running  *:3000->3000/tcp
-# ...   cottontrust_cadvisor           baia1  Running  *:8080->8080/tcp
-# ...   (+ cadvisor em baia2, 3, 4, 5 — mode: global)
+make ct-client-start        # escala cottonclient para 1 réplica
+make ct-logs-client         # acompanha em tempo real
 ```
 
-### 5.4 Acompanhar a execução
+### 5.4 Coletar métricas
 
 ```bash
-# Logs do cottonclient (experimento principal)
-make logs-client
-
-# Saída típica:
-# 2025-05-24 10:00:01 | INFO | COTTONTRUST iniciando
-# 2025-05-24 10:00:01 | INFO | Pool:    http://baia1:9000/genesis
-# 2025-05-24 10:00:01 | INFO | Modo:    COORDINATOR — http://coordinator-1:8000
-# 2025-05-24 10:00:02 | INFO | Registrando 4 UBA(s)...
-# 2025-05-24 10:00:02 | INFO | UBA registrado [coordinator] | id=UBA-2025-001 did=... tempo=0.412s
-# 2025-05-24 10:00:03 | INFO | UBA registrado [coordinator] | id=UBA-2025-002 did=... tempo=0.389s
-# 2025-05-24 10:00:05 | INFO | Registrando 6 Bale(s)...
-# 2025-05-24 10:00:09 | INFO | COTTONTRUST concluído
-# 2025-05-24 10:00:09 | INFO | Transações:  10
-# 2025-05-24 10:00:09 | INFO | Tempo total: 4.821s
-# 2025-05-24 10:00:09 | INFO | Média/tx:    0.482s
-
-# Logs de um coordinator específico
-make logs-coord NODE=1
-# 2025-05-24 10:00:02 | INFO | node-1 | FSM aplicando | entity_id=UBA-2025-001
-# 2025-05-24 10:00:02 | INFO | node-1 | NYM aplicado pelo FSM | size=312B total_aplicados=1
+SVC=$(docker ps --filter name=ct_cottonclient -q)
+docker cp $SVC:/app/output/raw_tx_metrics.csv ./results/ct_n16.csv
 ```
 
-### 5.5 Coletar métricas
-
-O CSV de métricas é salvo em `/app/output/raw_tx_metrics.csv` no container
-do cottonclient. Para extrair:
+### 5.5 Teardown
 
 ```bash
-# ID do serviço
-SVC=$(docker ps --filter name=cottontrust_cottonclient -q)
-
-docker cp $SVC:/app/output/raw_tx_metrics.csv ./results/metrics_kn8.csv
+make ct-client-stop         # para o client (opcional se já terminou)
+make ct-stop                # remove stack, configs e volumes
 ```
-
-Colunas do CSV:
-
-| Coluna | Tipo | Descrição |
-|--------|------|-----------|
-| `pool` | string | Hostname do genesis URL (ex: `baia1`) |
-| `operation` | string | `create_uba` ou `create_bale` |
-| `tx_time_sec` | float | Tempo total da transação (s) |
-| `tx_size_bytes` | int | Tamanho do payload NYM (0 no modo coordinator) |
-| `timestamp` | ISO 8601 | Data e hora da transação |
-
-### 5.6 Teardown e próximo experimento
-
-```bash
-make teardown    # Remove o stack (mantém VON Networks)
-make von-stop    # Para os VON Networks em baia1..baia4
-
-# Próximo experimento com Kn diferente:
-make von-start NODES=16   # Kn=4 — mínimo PBFT
-make deploy
-```
-
-**Atalho**: `make experiment NODES=32` combina `von-start` + `deploy`.
 
 ---
 
-## 6. Monitoramento
+## 6. Modo B — COTTON-NET Distribuído (principal)
 
-### Grafana — `http://baia5:3000`
+`Sn` supernodos, cada um com `Kn = NODES / Sn` nós Indy distribuídos pelas
+4 baias. Genesis independente por supernodo. Coordinator com RAFT entre
+supernodos. Mesma distribuição física do Modo A — comparação justa.
+
+### 6.1 Pré-requisito: imagem patcheada
+
+Para `Kn > 100`, o patch deve estar aplicado em todas as baias antes do deploy:
+
+```bash
+# Executar em cada baia (ou via SSH):
+make von-patch
+```
+
+### 6.2 Gerar o stack
+
+```bash
+# NODES = total de nós Indy, SUPERNODOS = número de supernodos
+make cn-config NODES=16 SUPERNODOS=4
+# Kn = 16/4 = 4 nós por supernodo
+```
+
+O comando gera `docker-stack-cottonnet.yml` e cria Docker Configs no Swarm:
+- `cn-gen-tx-sn${s}-kn${Kn}`: script `von_generate_transactions` customizado
+  para gerar genesis de Kn nós com PORT_OFFSET por supernodo
+- `cn-start-node-sn${s}-kn${Kn}`: script `start_node.sh` com offset de porta
+
+### 6.3 Deploy
+
+```bash
+make cn-deploy
+```
+
+Sobe por supernodo s (s = 1..Sn):
+- `webserver-sn${s}`: na baia do coordinator-s, porta 9000 — genesis do Sn s
+- `cn-sn${s}-node${n}`: nó Indy n do supernodo s, nas 4 baias, `mode: host`
+- `coordinator-${s}`: em cacao, porta 8000+s — RAFT + submissão ao Sn s
+
+Acompanhe o início:
+
+```bash
+make cn-status
+make cn-genesis
+#   ✅ http://10.10.20.151:9000/genesis   (S1)
+#   ✅ http://10.10.20.152:9000/genesis   (S2)
+#   ✅ http://10.10.20.153:9000/genesis   (S3)
+#   ✅ http://10.10.20.154:9000/genesis   (S4)
+```
+
+O cluster RAFT precisa de ~10–30s para eleger o líder após todos os
+coordinators subirem.
+
+### 6.4 Executar o experimento
+
+```bash
+make cn-client-start        # escala cottonclient para 1 réplica
+make cn-logs-client         # acompanha em tempo real
+make cn-logs-coord NODE=1   # logs do coordinator-1
+```
+
+### 6.5 Portas por supernodo (Kn=4, Sn=4)
+
+| Baia | S1 | S2 | S3 | S4 |
+|---|---|---|---|---|
+| flores | 9701/9702 | 9709/9710 | 9717/9718 | 9725/9726 |
+| corisco | 9703/9704 | 9711/9712 | 9719/9720 | 9727/9728 |
+| baiacu | 9705/9706 | 9713/9714 | 9721/9722 | 9729/9730 |
+| pernambuco | 9707/9708 | 9715/9716 | 9723/9724 | 9731/9732 |
+
+`PORT_OFFSET = (s-1) × Kn × 2`. Para Kn=8: offsets 0, 16, 32, 48.
+
+### 6.6 Coletar métricas
+
+```bash
+SVC=$(docker ps --filter name=cn_cottonclient -q)
+docker cp $SVC:/app/output/raw_tx_metrics.csv ./results/cn_n16_s4.csv
+```
+
+### 6.7 Teardown
+
+```bash
+make cn-client-stop
+make cn-stop NODES=16 SUPERNODOS=4   # remove stack, configs e volumes
+```
+
+---
+
+## 7. Monitoramento
+
+### Grafana — `http://10.10.20.155:3000`
 
 Credenciais padrão: `admin` / `cottontrust`
 (altere via `GRAFANA_PASSWORD` no `.env`).
 
-### Prometheus — `http://baia5:9090`
+### Prometheus — `http://10.10.20.155:9090`
 
-Queries úteis para os experimentos:
+Queries úteis:
 
 ```promql
 # NYMs confirmados por nó do RAFT
 cotton_nym_applied_total
 
-# Fila de retry (transações que falharam no Indy e aguardam re-submissão)
+# Fila de retry
 cotton_pending_queue_size
 
-# Latência p50 / p95 / p99 do endpoint /register
-histogram_quantile(0.50, rate(http_request_duration_seconds_bucket{handler="/register"}[5m]))
-histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{handler="/register"}[5m]))
-histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{handler="/register"}[5m]))
+# Latência p95 do /register
+histogram_quantile(0.95,
+  rate(http_request_duration_seconds_bucket{handler="/register"}[5m]))
 
-# Taxa de registros confirmados por segundo
+# Taxa de registros por segundo
 rate(http_requests_total{handler="/register", status="2xx"}[1m])
 
-# CPU por container (cAdvisor)
-rate(container_cpu_usage_seconds_total{name=~"cottontrust.*"}[1m])
-
-# Memória por container
-container_memory_usage_bytes{name=~"cottontrust.*"}
+# CPU por container
+rate(container_cpu_usage_seconds_total{name=~"cn_.*|ct_.*"}[1m])
 ```
 
-### Status direto via API
-
-Cada coordinator expõe `GET /status`:
+### Status direto do coordinator
 
 ```bash
-curl http://baia1:8001/status | python3 -m json.tool
-# {
-#   "node_id": "node-1",
-#   "raft_leader": true,
-#   "supernodo": "http://baia1:9000/genesis",
-#   "alive": true,
-#   "pending": 0
-# }
-
-# Verificar todos:
 for n in 1 2 3 4; do
-  PORT=$((8000 + n))
   echo "=== coordinator-$n ==="
-  curl -sf http://baia$n:$PORT/status | python3 -m json.tool
+  curl -sf http://10.10.20.155:$((8000 + n))/status | python3 -m json.tool
 done
 ```
 
 ---
 
-## 7. Referência de comandos
+## 8. Referência de comandos
 
 ```
-make swarm-init              Inicializa Docker Swarm (baia1=manager, baia2-5=workers)
-make registry-start          Sobe registry local em baia1:5000
+── Setup ─────────────────────────────────────────────────────────
+make swarm-init              Inicializa Docker Swarm
+make registry-start          Sobe registry local em flores:5000
+make build                   Constrói imagens Docker
+make push                    build + push para flores:5000
 
-make von-start  NODES=N      Inicia VON Networks com N nós totais (padrão: 32)
-make von-stop                Para todos os VON Networks
-make von-status              Verifica genesis endpoints em baia1..baia4
+── Imagem von-network-base ──────────────────────────────────────
+make von-patch               Patch indy-plenum: limite 100 → 10000 nós
+make von-local-build         Build + patch na baia atual (sem iniciar rede)
 
-make build                   Constrói imagens Docker localmente
-make push                    build + push para baia1:5000
-make deploy                  Deploy do stack completo no Swarm
-make teardown                Remove o stack
+── COTTONTRUST Distribuído (baseline) ───────────────────────────
+make ct-config   NODES=N     Gera stack + docker config
+make ct-deploy               Deploy do stack
+make ct-stop                 Remove stack, config e volumes
+make ct-status               Lista serviços e estados
+make ct-genesis              Verifica genesis (cacao:9000)
+make ct-client-start         Inicia cottonclient (0 → 1)
+make ct-client-stop          Para cottonclient (1 → 0)
+make ct-logs-client          Logs do cottonclient
+make ct-logs-web             Logs do webserver
 
-make logs-client             Logs em tempo real do cottonclient
-make logs-coord NODE=N       Logs em tempo real do coordinator-N (N=1..4)
-make status                  Lista serviços e em qual nó estão rodando
-
-make experiment NODES=N      von-start + deploy de uma vez
+── COTTON-NET Distribuído (principal) ───────────────────────────
+make cn-config   NODES=N SUPERNODOS=S  Gera stack + docker configs
+make cn-deploy               Deploy do stack
+make cn-stop                 Remove stack, configs e volumes
+make cn-status               Lista serviços e estados
+make cn-genesis              Verifica genesis das 4 baias (:9000)
+make cn-client-start         Inicia cottonclient (0 → 1)
+make cn-client-stop          Para cottonclient (1 → 0)
+make cn-logs-client          Logs do cottonclient
+make cn-logs-coord NODE=N    Logs do coordinator-N
 ```
 
 ---
 
-## 8. Variáveis de ambiente
+## 9. Variáveis de ambiente
 
 | Variável | Obrigatória | Default | Onde é usada |
 |----------|:-----------:|---------|--------------|
@@ -370,76 +379,94 @@ make experiment NODES=N      von-start + deploy de uma vez
 
 ---
 
-## 9. Solução de problemas
+## 10. Solução de problemas
 
-### Genesis não responde após `make von-start`
+### Genesis não responde
 
 ```bash
-# Verificar logs do VON Network em uma baia específica
-ssh indy@baia2 "cd /home/indy/von-network && ./manage logs"
+# Ver logs do webserver (modo CT)
+docker service logs ct_webserver
 
-# Reiniciar manualmente
-ssh indy@baia2 "cd /home/indy/von-network && ./manage stop && ./manage start --nodes 8"
+# Ver logs do webserver de um supernodo (modo CN, supernodo 1)
+docker service logs cn_webserver-sn1
+
+# Verificar se os nós Indy estão Running
+make ct-status   # ou: make cn-status
 ```
 
-### RAFT não elege líder
+### RAFT não elege líder (modo CN)
 
-O cluster RAFT precisa de quórum (3 de 4 nós). Se um coordinator
-não subiu, os outros ficam presos na eleição.
+O cluster RAFT precisa de quórum (3 de 4 coordinators). Causas comuns:
 
 ```bash
-# Ver qual coordinator está falhando
-make status
+make cn-status        # identifica qual coordinator está falhando
+make cn-logs-coord NODE=2
 
-# Logs do coordinator com falha
-make logs-coord NODE=2
-
-# Causas comuns:
-# - GENESIS_URL errado (supernodo Indy não respondeu antes do coordinator subir)
-# - PORT 60061 bloqueado entre as baias
-# - NODE_NUM incorreto no docker-compose.yml
+# Causas:
+# - Genesis ainda não disponível quando o coordinator subiu
+#   → aumente o delay de inicialização ou faça cn-stop + cn-deploy
+# - Porta 60061 bloqueada entre baias
+# - Volumes de raft-data de experimento anterior → make cn-stop limpa
 ```
 
-### Coordinator retorna 503 para o client
+### Coordinator retorna 503
 
-O supernodo Indy local está indisponível (`alive=false`). O coordinator
-rejeita requisições quando seu Sn local não está respondendo.
+O supernodo Indy local do coordinator está indisponível (`alive=false`).
 
 ```bash
-curl http://baia1:8001/status
-# "alive": false  ← problema no VON Network de baia1
+curl http://10.10.20.155:8001/status | python3 -m json.tool
+# "alive": false  ← problema no Indy do coordinator-1
 
-make von-status  # verifica todos
+make cn-genesis    # verifica todos os genesis
 ```
 
 ### Transações ficando na fila de retry (`pending > 0`)
 
-O coordinator aceitou a transação via RAFT mas falhou ao aplicar no Indy.
-O retry acontece automaticamente com backoff exponencial (máx. 5 min).
+O coordinator aceitou via RAFT mas falhou ao submeter ao Indy.
+Retry automático com backoff exponencial (máx. 5 min).
 
 ```bash
-# Monitorar a fila
-curl http://baia1:8001/status | python3 -c "import sys,json; d=json.load(sys.stdin); print('pending:', d['pending'])"
+curl http://10.10.20.155:8001/status | \
+  python3 -c "import sys,json; d=json.load(sys.stdin); print('pending:', d['pending'])"
 
-# Ver erros no log
-make logs-coord NODE=1 | grep "Retry falhou"
+make cn-logs-coord NODE=1 | grep "Retry"
+```
+
+### Conflito de portas entre supernodos
+
+Cada supernodo usa `PORT_OFFSET = (s-1) × Kn × 2`. Se o stack anterior
+não foi removido corretamente, portas podem estar ocupadas.
+
+```bash
+make cn-stop NODES=<anterior> SUPERNODOS=<anterior>
+```
+
+### Patch do indy-plenum não persistiu
+
+O patch é aplicado na imagem local `von-network-base`. Se a imagem foi
+reconstruída (e.g., `./manage build` novamente), o patch precisa ser
+reaplicado:
+
+```bash
+make von-patch
 ```
 
 ### Executar o client localmente (fora do Docker)
 
 ```bash
 cd client
+pip install -e ../packages/cottontrust-core
 pip install -r requirements.txt
 
 # Modo direto (sem coordinator)
-export GENESIS_URL=http://baia1:9000/genesis
+export GENESIS_URL=http://10.10.20.155:9000/genesis
 export TRUSTEE_SEED=000000000000000000000000Trustee1
 export TRUSTEE_DID=V4SGRU86Z58d6TV7PBUe6f
-export WALLET_DIR=./wallets   # evita /app/wallets hardcoded
+export WALLET_DIR=./wallets
 
 python main.py
 
-# Modo COTTON-NET (com coordinator rodando no Swarm)
-export COORDINATOR_URL=http://baia1:8001
+# Modo COTTON-NET (coordinator já rodando no Swarm)
+export COORDINATOR_URL=http://10.10.20.155:8001
 python main.py
 ```

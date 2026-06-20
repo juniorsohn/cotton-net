@@ -7,6 +7,10 @@ Self-Sovereign Identity (SSI) e Hyperledger Indy.
 Desenvolvida no Laboratório de Processamento Paralelo e Distribuído
 (LabP2D) — UDESC Joinville.
 
+> **Experimentos:** COTTONTRUST distribuído (`ct-*`) como baseline e
+> COTTON-NET distribuído (`cn-*`) como contribuição principal.
+> Ver [USAGE.md](USAGE.md) para o guia operacional completo.
+
 ---
 
 ## Contexto
@@ -48,8 +52,9 @@ O **COTTON-NET** estende o COTTONTRUST com duas contribuições:
                                │          │
                 ┌──────────────▼──┐   ┌───▼──────────────┐
                 │  Supernodo S1   │   │  Supernodo S2     │
-                │  VON Network    │   │  VON Network      │
-                │  RBFT (4+ nós)  │   │  RBFT (4+ nós)   │
+                │  Kn nós Indy   │   │  Kn nós Indy     │
+                │  distribuídos  │   │  distribuídos    │
+                │  RBFT           │   │  RBFT             │
                 └─────────────────┘   └──────────────────┘
 
                 ┌──────────────────────────────────────────┐
@@ -65,6 +70,20 @@ O **COTTON-NET** estende o COTTONTRUST com duas contribuições:
 | Interna | Dentro de cada Sn | RBFT (Indy Plenum) | Tolerância a falhas bizantinas |
 | Externa | Entre supernodos | RAFT (raftify) | Eleição de líder e quórum de commit |
 
+### Distribuição dos nós Indy
+
+Cada supernodo possui `Kn = NODES / Sn` nós Indy com genesis independente,
+distribuídos igualmente pelas 4 baias físicas. Para `Kn=8, Sn=4`:
+
+```
+flores       corisco      baiacu       pernambuco
+S1n1,S2n1    S1n2,S2n2    S1n3,S2n3    S1n4,S2n4
+S3n1,S4n1    S3n2,S4n2    S3n3,S4n3    S3n4,S4n4
+```
+
+Cada supernodo gera seu genesis independentemente (sem compartilhamento entre
+pools). Conflitos de porta são evitados por `PORT_OFFSET = (s-1) × Kn × 2`.
+
 ### Cadeia de endorsers SSI
 
 ```
@@ -78,12 +97,17 @@ trustee
       └── Fardinho  ←── Armazém endossa
 ```
 
-(*) Fazenda é endossada pelo trustee pois tem personalidade jurídica independente
-(CNPJ próprio). A relação com Entidade é de filiação registrada nos metadados.
+(*) Fazenda é endossada pelo trustee pois tem personalidade jurídica independente.
 
-Cada par NYM + ATTRIB transaction registra a identidade e os
-atributos públicos da entidade. Dados sensíveis (CPF, CNPJ,
-geolocalização) nunca vão ao ledger.
+---
+
+## Modos de experimento
+
+| Modo | Stack | Comando | Descrição |
+|---|---|---|---|
+| COTTONTRUST Distribuído | `ct` | `make ct-config ct-deploy` | Baseline: Indy RBFT flat, N nós distribuídos em 4 baias |
+| COTTON-NET Distribuído | `cn` | `make cn-config cn-deploy` | Principal: Sn supernodos × Kn nós + RAFT entre supernodos |
+| COTTON-NET Local | `cottontrust` | `make deploy` | Legacy: VON Networks locais por baia |
 
 ---
 
@@ -92,14 +116,23 @@ geolocalização) nunca vão ao ledger.
 ```
 cottonnet/
 ├── .env.example              # Variáveis de ambiente (copie para .env)
-├── docker-compose.yml        # Stack completo (Docker Swarm)
-├── Makefile                  # Workflow de experimentos
+├── docker-compose.yml        # Stack COTTON-NET local (legacy)
+├── Makefile                  # Workflow de todos os modos de experimento
 ├── README.md                 # Este arquivo
+├── USAGE.md                  # Guia operacional detalhado
+│
+├── scripts/
+│   ├── swarm_init.sh                 # Inicializa Docker Swarm
+│   ├── start_von.sh                  # Configura VON no NFS (modo local)
+│   ├── stop_von.sh                   # Para VON Networks
+│   ├── patch_von_image.sh            # Patch indy-plenum: limite 100 → 10000 nós
+│   ├── gen_cottontrust_stack.sh      # Gera docker-stack-cottontrust.yml
+│   └── gen_cottonnet_stack.sh        # Gera docker-stack-cottonnet.yml
 │
 ├── client/                   # Cottonclient — aplicação Python
 │   ├── main.py               # Orquestrador (7 níveis, concorrência por nível)
 │   ├── config.py             # Configuração via .env
-│   ├── coordinator.py        # Cliente HTTP do Coordinator (register + wait_for_drain)
+│   ├── coordinator.py        # Cliente HTTP do Coordinator
 │   ├── dockerfile
 │   ├── requirements.txt
 │   ├── entities/             # Modelo COTTON-CELL
@@ -107,7 +140,7 @@ cottonnet/
 │   │   ├── entidade.py       # Empresa/cooperativa produtora
 │   │   ├── fazenda.py        # Propriedade rural
 │   │   ├── setor.py          # Subdivisão da fazenda
-│   │   ├── talhao.py         # Parcela agrícola (unidade de cultivo)
+│   │   ├── talhao.py         # Parcela agrícola
 │   │   ├── armazem.py        # Unidade de Beneficiamento de Algodão
 │   │   ├── lote_mp.py        # Lote de matéria-prima
 │   │   └── fardinho.py       # Fardo individual de pluma
@@ -141,65 +174,79 @@ cottonnet/
     └── provisioning/
 ```
 
----
+Arquivos gerados pelo Makefile (não commitados):
 
-## Pré-requisitos
-
-- Docker >= 28.0 e Docker Compose v2
-- Docker Swarm inicializado (`docker swarm init`)
-- VON Network rodando (local ou remoto)
-
-### Subindo o VON Network localmente
-
-```bash
-git clone https://github.com/bcgov/von-network
-cd von-network
-./manage build
-./manage start --logs
+```
+docker-stack-cottontrust.yml   # gerado por: make ct-config NODES=N
+docker-stack-cottonnet.yml     # gerado por: make cn-config NODES=N SUPERNODOS=S
 ```
 
-O genesis ficará disponível em `http://localhost:9000/genesis`.
+---
+
+## Topologia do cluster
+
+| Hostname | IP | Função |
+|---|---|---|
+| flores | 10.10.20.151 | Worker Swarm — nós Indy baia 1 |
+| corisco | 10.10.20.152 | Worker Swarm — nós Indy baia 2 |
+| baiacu | 10.10.20.153 | Worker Swarm — nós Indy baia 3 |
+| pernambuco | 10.10.20.154 | Worker Swarm — nós Indy baia 4 |
+| cacao | 10.10.20.155 | Manager Swarm — cliente, monitoramento |
+
+NFS compartilhado em todas as baias:
+`/mnt/prj/g11718038933/cotton-net_2026/von-network`
 
 ---
 
 ## Início rápido
 
-### Smoke test local (modo direto, sem Swarm)
+### Setup único (uma vez por cluster)
 
 ```bash
-# 1. Configure o ambiente
-cp .env.example .env
-# Edite GENESIS_URL=http://host.docker.internal:9000/genesis
-
-# 2. Build da imagem do client
-docker build -t cottontrust-client:local -f client/dockerfile .
-
-# 3. Execute
-docker run --rm \
-  --add-host host.docker.internal:host-gateway \
-  --env-file .env \
-  -v "$(pwd)/output:/app/output" \
-  cottontrust-client:local
+make swarm-init        # inicializa o Swarm
+make registry-start    # registry local em flores:5000
+make push              # build + push das imagens
 ```
 
-### Experimento no cluster (modo COTTON-NET)
+### Experimento COTTONTRUST Distribuído (baseline)
 
 ```bash
-# 1. Inicializa Swarm + registry (uma vez só)
-make swarm-init
-make registry-start
-
-# 2. Inicia supernodos e faz o deploy
-make experiment NODES=32   # von-start + deploy coordinators + monitoring
-
-# 3. Dispara o experimento
-export COORDINATOR_URL=http://coordinator-1:8000
-export CONCURRENCY=10
-make client-start
-
-# 4. Acompanha
-make logs-client
+make ct-config NODES=16      # gera docker-stack-cottontrust.yml
+make ct-deploy               # sobe N nós Indy em 4 baias
+make ct-client-start         # inicia o experimento
+make ct-logs-client          # acompanha
+make ct-stop                 # teardown completo
 ```
+
+### Experimento COTTON-NET Distribuído (principal)
+
+```bash
+# Pré-requisito: von-network-base disponível e patcheada em cada baia
+make cn-config NODES=16 SUPERNODOS=4   # gera docker-stack-cottonnet.yml
+make cn-deploy                          # sobe Sn supernodos + coordinators
+make cn-client-start                    # inicia o experimento
+make cn-logs-client                     # acompanha
+make cn-stop                            # teardown completo
+```
+
+`NODES` é o total de nós Indy; `Kn = NODES / SUPERNODOS`.
+Mínimo: `Kn = 4` (quórum RBFT). Sugerido: `NODES = 16, 32, 64`.
+
+---
+
+## Patch do limite de nós Indy Plenum
+
+O Hyperledger Indy Plenum possui um limite artificial de 100 nós em
+`plenum/common/test_network_setup.py`. Esse limite é um placeholder de
+governança, não uma restrição do protocolo RBFT.
+
+```bash
+# Em cada baia, após ./manage build:
+make von-patch
+```
+
+O patch substitui `if n > 100:` por `if n > 10000:` dentro da imagem
+`von-network-base` e é idempotente. Para `Kn ≤ 100`, o patch é inócuo.
 
 ---
 
@@ -237,8 +284,9 @@ make logs-client
   Cotton Supply Chain Using Self-Sovereign Identity**.
   AINA 2024, Springer.
 
-- Sohn Junior, G. et al. **COTTON-NET**.
-  Trabalho técnico-científico, LabP2D — UDESC Joinville, 2026.
+- Sohn Junior, G. et al. **COTTON-NET: Scalable SSI Ledger with
+  Hierarchical Supernode Consensus**.
+  CloudCom 2026 (submetido).
 
 - Hyperledger Indy VDR: https://github.com/hyperledger/indy-vdr
 - Aries Askar: https://github.com/hyperledger/aries-askar
