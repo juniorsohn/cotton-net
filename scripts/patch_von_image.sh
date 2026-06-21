@@ -22,18 +22,7 @@ echo "🔧 Aplicando patch indy-plenum: limite de nós 100 → 10000..."
 
 docker build -q -t von-network-base - <<'PATCHEOF'
 FROM von-network-base
-RUN python3 -c "
-import plenum.common.test_network_setup as m, inspect, pathlib
-src = pathlib.Path(inspect.getfile(m))
-txt = src.read_text()
-orig = txt
-txt = txt.replace('if n > 100:', 'if n > 10000:')
-if txt == orig:
-    print('Patch ja aplicado (ou string nao encontrada) em:', src)
-else:
-    src.write_text(txt)
-    print('Patch OK:', src)
-"
+RUN python3 -c "import plenum.common.test_network_setup as m, inspect, pathlib; src = pathlib.Path(inspect.getfile(m)); txt = src.read_text(); patched = txt.replace('if n > 100:', 'if n > 10000:'); src.write_text(patched); print('Patch OK:' if patched != txt else 'Patch ja aplicado:', src)"
 PATCHEOF
 
 echo "✅ von-network-base patcheado (limite 100 → 10000 nós)."
