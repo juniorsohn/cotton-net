@@ -160,7 +160,7 @@ async def run() -> None:
 
     pool_name = urllib.parse.urlparse(settings.genesis_url).hostname or "sandbox"
     metrics = MetricsCollector(pool_name=pool_name, output_path=settings.metrics_output)
-    models = Path(settings.models_dir)
+    models = Path(settings.data_dir if settings.data_dir else settings.models_dir)
     wk = settings.wallet_key
 
     common = dict(pool=pool, trustee_store=trustee_store, trustee_did=trustee_did,
