@@ -189,11 +189,23 @@ export IP=\${IP:-\$MY_IP}
 
 NODE_PORT=\$(( 9700 + NODE_NUM * 2 - 1 + PORT_OFFSET ))
 CLIENT_PORT=\$(( 9700 + NODE_NUM * 2 + PORT_OFFSET ))
+GENESIS=/home/indy/ledger/sandbox/pool_transactions_genesis
 
 if [ ! -d "/home/indy/ledger/sandbox/keys" ]; then
     echo "Gerando genesis | S${s} Node\${NODE_NUM} offset=${PORT_OFFSET}..."
     HOST="\$IP" /home/indy/bin/von_generate_transactions -n "\${NODE_NUM}" -i "\$IP"
 fi
+
+# Aguarda genesis estável antes de iniciar o Plenum.
+# Com N grande e volume NFS, escritas concorrentes do genesis causam leitura
+# parcial pelo Plenum → LogicError "Inconsistent number of replicas".
+# Delay = KN (base para escritas terminarem) + NODE_NUM (escalonamento).
+PLENUM_DELAY=\$(( ${KN} + NODE_NUM ))
+echo "Aguardando \${PLENUM_DELAY}s para genesis estabilizar (Node\${NODE_NUM}/${KN})..."
+sleep \${PLENUM_DELAY}
+
+_count=\$(grep -c . "\${GENESIS}" 2>/dev/null || echo 0)
+echo "Genesis: \${_count}/${KN} entradas confirmadas"
 
 echo "Iniciando Node\${NODE_NUM} | \$IP:\${NODE_PORT} (client:\${CLIENT_PORT})"
 exec start_indy_node "Node\${NODE_NUM}" "0.0.0.0" "\${NODE_PORT}" "0.0.0.0" "\${CLIENT_PORT}"
