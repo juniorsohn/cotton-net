@@ -200,7 +200,7 @@ ct-config:
 	@./scripts/gen_cottontrust_stack.sh $(NODES)
 
 ct-deploy:
-	docker stack deploy --resolve-image=never -c docker-stack-cottontrust.yml $(CT_STACK)
+	docker stack deploy -c docker-stack-cottontrust.yml $(CT_STACK)
 
 ct-stop:
 	@echo "Removendo stack $(CT_STACK)..."
@@ -250,7 +250,7 @@ cn-config:
 	@./scripts/gen_cottonnet_stack.sh $(NODES) $(SUPERNODOS)
 
 cn-deploy:
-	docker stack deploy --resolve-image=never -c docker-stack-cottonnet.yml $(CN_STACK)
+	docker stack deploy -c docker-stack-cottonnet.yml $(CN_STACK)
 
 cn-stop:
 	@echo "Removendo stack $(CN_STACK)..."
