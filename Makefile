@@ -94,7 +94,8 @@ help:
 	@echo ""
 	@echo "  ── COTTON-NET Distribuído (Indy fragmentado, RAFT entre super-nós) ──"
 	@echo "  cn-config   NODES=N SUPERNODOS=S  Gera stack YAML + docker configs"
-	@echo "  cn-deploy               Deploy do stack COTTON-NET distribuído"
+	@echo "  cn-deploy               Deploy do stack (todos os SN simultâneos)"
+	@echo "  cn-deploy-seq           Deploy sequencial: um SN por vez (recomendado)"
 	@echo "  cn-stop                 Remove stack + configs + volumes"
 	@echo "  cn-status               Status do stack COTTON-NET distribuído"
 	@echo "  cn-genesis              Verifica genesis de cada baia (S_n×:9000)"
@@ -250,7 +251,46 @@ cn-config:
 	@./scripts/gen_cottonnet_stack.sh $(NODES) $(SUPERNODOS)
 
 cn-deploy:
-	docker stack deploy -c docker-stack-cottonnet.yml $(CN_STACK)
+	docker stack deploy --resolve-image=never -c docker-stack-cottonnet.yml $(CN_STACK)
+
+# Deploy sequencial: sobe um SN por vez, aguardando genesis antes de avançar.
+# Evita race condition de agendamento e contenda NFS quando todos os 128 nós
+# tentam iniciar ao mesmo tempo.
+cn-deploy-seq:
+	@KN=$$(( $(NODES) / $(SUPERNODOS) )); \
+	BAIA_IPS_ARR=($(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP)); \
+	echo "=== Deploy sequencial COTTON-NET: $(SUPERNODOS) SN × $$KN nós ==="; \
+	docker stack deploy --resolve-image=never -c docker-stack-cottonnet.yml $(CN_STACK); \
+	echo "Pausando nós SN2..SN$(SUPERNODOS) (aguardando vez de cada SN)..."; \
+	for s in $$(seq 2 $(SUPERNODOS)); do \
+		( for n in $$(seq 1 $$KN); do \
+			docker service update --replicas=0 --detach \
+				$(CN_STACK)_cn-sn$${s}-node$${n} >/dev/null 2>&1; \
+		done; \
+		docker service update --replicas=0 --detach \
+			$(CN_STACK)_webserver-sn$${s} >/dev/null 2>&1; \
+		) & \
+	done; \
+	wait; \
+	echo "SN2-SN$(SUPERNODOS) pausados. Iniciando sequência..."; \
+	for s in $$(seq 1 $(SUPERNODOS)); do \
+		echo ""; \
+		echo "--- SN$$s: escalando $$KN nós Indy + webserver ---"; \
+		for n in $$(seq 1 $$KN); do \
+			docker service update --replicas=1 --detach \
+				$(CN_STACK)_cn-sn$${s}-node$${n} >/dev/null 2>&1; \
+		done; \
+		docker service update --replicas=1 --detach \
+			$(CN_STACK)_webserver-sn$${s} >/dev/null 2>&1; \
+		WEBIP=$${BAIA_IPS_ARR[$$((s-1))]}; \
+		echo "Aguardando genesis SN$$s em http://$$WEBIP:9000 ..."; \
+		until curl -sf "http://$$WEBIP:9000/genesis" >/dev/null 2>&1; do \
+			printf '.'; sleep 15; \
+		done; \
+		echo " ✅ SN$$s OK"; \
+	done; \
+	echo ""; \
+	echo "✅ Todos os $(SUPERNODOS) supernodos com genesis OK"
 
 cn-stop:
 	@echo "Removendo stack $(CN_STACK)..."
@@ -302,5 +342,5 @@ cn-logs-coord:
         logs-client logs-coord status experiment \
         ct-config ct-deploy ct-stop ct-status ct-genesis \
         ct-client-start ct-client-stop ct-logs-client ct-logs-web \
-        cn-config cn-deploy cn-stop cn-status cn-genesis \
+        cn-config cn-deploy cn-deploy-seq cn-stop cn-status cn-genesis \
         cn-client-start cn-client-stop cn-logs-client cn-logs-coord
