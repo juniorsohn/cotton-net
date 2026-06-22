@@ -416,8 +416,14 @@ NODE
       WALLET_KEY:   "\${WALLET_KEY:-7h3gFmD4QZdGdzt2NDtTg3XZwXFENBa1ogAgwHBxHNpw}"
       LOG_LEVEL:    "\${LOG_LEVEL:-INFO}"
     ports:
-      - "$(( 8000 + s )):8000"
-      - "6006${s}:60061"
+      - target: 8000
+        published: $(( 8000 + s ))
+        protocol: tcp
+        mode: host
+      - target: 60061
+        published: 6006${s}
+        protocol: tcp
+        mode: host
     networks: [cotton-overlay]
     volumes:
       - coordinator-${s}-wallets:/app/wallets
