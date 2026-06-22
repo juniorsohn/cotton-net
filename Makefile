@@ -1,4 +1,5 @@
 # COTTONTRUST / COTTON-NET — Makefile
+SHELL := /bin/bash
 #
 # ── Workflow COTTON-NET (RAFT + supernodos) ───────────────────────────────────
 #   1. make swarm-init            (uma vez só)
