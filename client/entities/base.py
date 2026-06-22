@@ -221,6 +221,7 @@ class CottonCell:
             mode=mode,
             setup_time_sec=setup_time,
             coordinator_time_sec=coordinator_time,
+            entity_id=str(self.entity_id),
         )
 
         logger.info(

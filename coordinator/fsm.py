@@ -86,7 +86,9 @@ class CoordinatorFSM:
         self.store       = store
         self.trustee_did = trustee_did
         self.pending     = pending
-        self.applied     = 0
+        self.applied       = 0
+        self.bytes_written = 0
+        self._entity_timing: dict = {}   # entity_id → {queue_wait_sec, indy_time_sec, tx_size_bytes}
         self._queue: queue.Queue = queue.Queue()
 
     async def apply(self, data: bytes) -> bytes:
@@ -115,14 +117,15 @@ class CoordinatorFSM:
         while True:
             while not self._queue.empty():
                 entry, t_enqueue = self._queue.get_nowait()
-                FSM_QUEUE_WAIT.labels(node_id=_NODE_ID).observe(time.monotonic() - t_enqueue)
-                await self._submit_nym(entry)
+                queue_wait = time.monotonic() - t_enqueue
+                FSM_QUEUE_WAIT.labels(node_id=_NODE_ID).observe(queue_wait)
+                await self._submit_nym(entry, queue_wait)
             await asyncio.sleep(0.05)
 
-    async def _submit_nym(self, entry: "NymLogEntry") -> None:
+    async def _submit_nym(self, entry: "NymLogEntry", queue_wait: float = 0.0) -> None:
         NYM_ATTEMPTED.labels(node_id=_NODE_ID).inc()
         try:
-            t0 = time.monotonic()
+            t_indy_start = time.monotonic()
             _, tx_size = await submit_nym(
                 pool          = self.pool,
                 store         = self.store,
@@ -130,12 +133,20 @@ class CoordinatorFSM:
                 target_did    = entry.did,
                 verkey        = entry.verkey,
             )
-            INDY_WRITE_LATENCY.labels(node_id=_NODE_ID).observe(time.monotonic() - t0)
+            indy_time = time.monotonic() - t_indy_start
+            INDY_WRITE_LATENCY.labels(node_id=_NODE_ID).observe(indy_time)
             NYM_APPLIED.labels(node_id=_NODE_ID).inc()
             self.applied += 1
+            self.bytes_written += tx_size
+            self._entity_timing[entry.entity_id] = {
+                "queue_wait_sec": round(queue_wait, 6),
+                "indy_time_sec":  round(indy_time, 6),
+                "tx_size_bytes":  tx_size,
+            }
             logger.info(
                 f"NYM aplicado | entity_id={entry.entity_id} "
-                f"did={entry.did} size={tx_size}B total={self.applied}"
+                f"did={entry.did} size={tx_size}B "
+                f"queue={queue_wait:.3f}s indy={indy_time:.3f}s total={self.applied}"
             )
         except Exception as e:
             NYM_FAILED.labels(node_id=_NODE_ID).inc()

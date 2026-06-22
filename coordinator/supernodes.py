@@ -37,16 +37,24 @@ class SupernodeInfo:
     pool:        object = field(default=None, repr=False)
     alive:       bool   = False
 
-    async def connect(self) -> None:
-        """Abre conexão com o pool Indy local."""
-        try:
-            self.pool = await open_pool(self.genesis_url)
-            self.alive = True
-            logger.info(f"Supernodo conectado | node={self.node_id}")
-        except Exception as e:
-            self.alive = False
-            logger.error(f"Falha ao conectar supernodo | node={self.node_id} erro={e}")
-            raise
+    async def connect(self, max_retries: int = 30, retry_delay: float = 10.0) -> None:
+        """Abre conexão com o pool Indy local, com retry até genesis estar disponível."""
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.pool = await open_pool(self.genesis_url)
+                self.alive = True
+                logger.info(f"Supernodo conectado | node={self.node_id}")
+                return
+            except Exception as e:
+                self.alive = False
+                if attempt >= max_retries:
+                    logger.error(f"Falha ao conectar supernodo | node={self.node_id} erro={e}")
+                    raise
+                logger.warning(
+                    f"Supernodo indisponível, aguardando... | node={self.node_id} "
+                    f"tentativa={attempt}/{max_retries} erro={e}"
+                )
+                await asyncio.sleep(retry_delay)
 
     async def healthcheck(self) -> bool:
         """

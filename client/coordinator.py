@@ -78,22 +78,41 @@ async def register_entity(
     )
 
 
+async def get_entity_timing(
+    coordinator_url: str,
+    timeout: float = 10.0,
+) -> dict:
+    """
+    Consulta o timing real de cada NYM aplicado pelo FSM.
+
+    Retorna dict {entity_id: {queue_wait_sec, indy_time_sec, tx_size_bytes}}.
+    Chamar após wait_for_drain() garante que todos os dados estão presentes.
+    """
+    url = f"{coordinator_url.rstrip('/')}/entity_timing"
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        return r.json()
+
+
 async def wait_for_drain(
     coordinator_url: str,
     poll_interval: float = 5.0,
     timeout: float = 30.0,
-) -> None:
+) -> int:
     """
     Aguarda o FSM do coordinator esvaziar a fila de aplicação ao Indy.
 
-    Após enviar todos os requests, o cottonclient chama esta função para
-    garantir que o tempo total do experimento inclui a escrita efetiva
-    em todos os supernodos — tornando a métrica comparável ao modo direto.
+    Retorna o total de bytes escritos no ledger pelo FSM (soma dos tx_size
+    de todos os NYMs aplicados), útil para preencher tx_size_bytes nas métricas.
 
     Args:
         coordinator_url: URL base do coordinator líder.
         poll_interval:   Intervalo entre polls em segundos.
         timeout:         Timeout máximo por requisição HTTP.
+
+    Returns:
+        Total de bytes escritos no ledger Indy pelo FSM deste nó.
     """
     url = f"{coordinator_url.rstrip('/')}/status"
     logger.info("Aguardando drenagem da fila FSM do coordinator...")
@@ -105,11 +124,12 @@ async def wait_for_drain(
                 data = r.json()
                 fsm_queue   = data.get("fsm_queue", 0)
                 fsm_applied = data.get("fsm_applied", 0)
+                fsm_bytes   = data.get("fsm_bytes", 0)
                 if fsm_queue == 0:
                     logger.info(
-                        f"Fila FSM drenada | aplicados={fsm_applied}"
+                        f"Fila FSM drenada | aplicados={fsm_applied} bytes={fsm_bytes}"
                     )
-                    return
+                    return fsm_bytes
                 logger.debug(
                     f"Fila FSM | pendentes={fsm_queue} aplicados={fsm_applied}"
                 )

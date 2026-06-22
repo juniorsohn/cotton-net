@@ -488,7 +488,10 @@ cat <<MONITORING
       - /sys:/host/sys:ro
       - /:/rootfs:ro
     ports:
-      - "9100:9100"
+      - target: 9100
+        published: 9100
+        protocol: tcp
+        mode: host
     networks: [cotton-overlay]
 
   prometheus:
@@ -505,7 +508,10 @@ cat <<MONITORING
       - '--storage.tsdb.retention.time=30d'
       - '--web.enable-lifecycle'
     ports:
-      - "9091:9090"
+      - target: 9090
+        published: 9091
+        protocol: tcp
+        mode: host
     networks: [cotton-overlay]
     volumes:
       - prometheus-data:/prometheus
@@ -523,7 +529,10 @@ cat <<MONITORING
       GF_SECURITY_ADMIN_PASSWORD: "\${GRAFANA_PASSWORD:-cottontrust}"
       GF_USERS_ALLOW_SIGN_UP:     "false"
     ports:
-      - "3002:3000"
+      - target: 3000
+        published: 3002
+        protocol: tcp
+        mode: host
     networks: [cotton-overlay]
     volumes:
       - grafana-data:/var/lib/grafana
@@ -547,7 +556,10 @@ cat <<MONITORING
       SUBMIT_TIMEOUT:  "15"
       LOG_LEVEL:       "\${LOG_LEVEL:-INFO}"
     ports:
-      - "9309:9309"
+      - target: 9309
+        published: 9309
+        protocol: tcp
+        mode: host
     networks: [cotton-overlay]
 MONITORING
 

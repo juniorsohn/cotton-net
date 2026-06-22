@@ -33,9 +33,9 @@ class MetricsCollector:
     """
 
     HEADERS = [
-        "pool", "operation", "mode", "entity_num",
+        "pool", "operation", "mode", "entity_num", "entity_id",
         "tx_time_sec", "setup_time_sec", "coordinator_time_sec",
-        "tx_size_bytes", "timestamp",
+        "queue_wait_sec", "indy_time_sec", "tx_size_bytes", "timestamp",
     ]
 
     def __init__(self, pool_name: str, output_path: str) -> None:
@@ -52,6 +52,9 @@ class MetricsCollector:
         mode: str = "direct",
         setup_time_sec: float = 0.0,
         coordinator_time_sec: float = 0.0,
+        entity_id: str = "",
+        queue_wait_sec: float = 0.0,
+        indy_time_sec: float = 0.0,
     ) -> None:
         """
         Registra uma métrica de transação em memória.
@@ -69,9 +72,12 @@ class MetricsCollector:
             "operation":            operation,
             "mode":                 mode,
             "entity_num":           len(self.records) + 1,
+            "entity_id":            entity_id,
             "tx_time_sec":          round(tx_time_sec, 6),
             "setup_time_sec":       round(setup_time_sec, 6),
             "coordinator_time_sec": round(coordinator_time_sec, 6),
+            "queue_wait_sec":       round(queue_wait_sec, 6),
+            "indy_time_sec":        round(indy_time_sec, 6),
             "tx_size_bytes":        tx_size_bytes,
             "timestamp":            datetime.now().isoformat(),
         }

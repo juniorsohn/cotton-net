@@ -360,13 +360,14 @@ class RegisterResponse(BaseModel):
 
 
 class StatusResponse(BaseModel):
-    node_id:       str
-    raft_leader:   bool
-    supernodo:     str
-    alive:         bool
-    pending:       int
-    fsm_queue:     int
-    fsm_applied:   int
+    node_id:        str
+    raft_leader:    bool
+    supernodo:      str
+    alive:          bool
+    pending:        int
+    fsm_queue:      int
+    fsm_applied:    int
+    fsm_bytes:      int
 
 
 @app.post("/register", response_model=RegisterResponse)
@@ -423,7 +424,19 @@ async def status():
         pending     = pending.size,
         fsm_queue   = fsm._queue.qsize() if fsm else 0,
         fsm_applied = fsm.applied if fsm else 0,
+        fsm_bytes   = fsm.bytes_written if fsm else 0,
     )
+
+
+@app.get("/entity_timing")
+async def entity_timing():
+    """
+    Retorna o timing real de cada NYM aplicado pelo FSM.
+
+    Usado pelo cottonclient após wait_for_drain() para preencher
+    tx_time_sec e tx_size_bytes com medições reais (não estimativas).
+    """
+    return fsm._entity_timing if fsm else {}
 
 
 @app.get("/health")

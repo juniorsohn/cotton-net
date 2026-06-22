@@ -18,6 +18,7 @@ para lookup durante o registro dos filhos.
 import asyncio
 import json
 import sys
+import time
 import urllib.parse
 from asyncio import Semaphore
 from pathlib import Path
@@ -35,7 +36,7 @@ from entities.armazem import Armazem
 from entities.lote_mp import LoteMP
 from entities.fardinho import Fardinho
 from metrics.collector import MetricsCollector
-from coordinator import wait_for_drain
+from coordinator import wait_for_drain, get_entity_timing
 
 
 def setup_logging(level: str, log_file: str = "/app/output/cottontrust.log") -> None:
@@ -167,6 +168,8 @@ async def run() -> None:
                   metrics=metrics, coordinator_url=settings.coordinator_url,
                   concurrency=settings.concurrency)
 
+    t_experiment_start = time.monotonic()
+
     # Nivel 1 — Entidades (endorser: trustee)
     entidades_data = load_json(models / "entidades.json")
     logger.info(f"Registrando {len(entidades_data)} Entidade(s)...")
@@ -214,8 +217,31 @@ async def run() -> None:
 
     # No modo coordinator, aguarda a fila FSM esvaziar antes de encerrar,
     # garantindo que o tempo total inclui a escrita efetiva em todos os supernodos.
+    # O FSM retorna o total de bytes escritos, usado para preencher tx_size_bytes
+    # em cada registro (média por transação, já que NYMs têm tamanho uniforme).
     if settings.coordinator_url:
         await wait_for_drain(settings.coordinator_url)
+        total_elapsed = time.monotonic() - t_experiment_start
+        logger.info(f"Tempo total (start→drain): {total_elapsed:.3f}s")
+
+        # Busca timing real (por entity_id) do FSM do coordinator.
+        # queue_wait_sec + indy_time_sec são medidos no coordinator com time.monotonic().
+        # tx_time_sec é atualizado para: setup + raft_propose + queue_wait + indy_write.
+        try:
+            entity_timing = await get_entity_timing(settings.coordinator_url)
+            for r in metrics.records:
+                eid = r.get("entity_id", "")
+                t = entity_timing.get(eid)
+                if t:
+                    r["queue_wait_sec"] = t["queue_wait_sec"]
+                    r["indy_time_sec"]  = t["indy_time_sec"]
+                    r["tx_size_bytes"]  = t["tx_size_bytes"]
+                    r["tx_time_sec"]    = round(
+                        r["setup_time_sec"] + r["coordinator_time_sec"]
+                        + t["queue_wait_sec"] + t["indy_time_sec"], 6
+                    )
+        except Exception as e:
+            logger.warning(f"Não foi possível obter timing do FSM: {e}")
 
     metrics.save()
     summary = metrics.summary
