@@ -264,7 +264,7 @@ networks:
     attachable: true
     ipam:
       config:
-        - subnet: 10.0.2.0/20
+        - subnet: 10.0.16.0/20
 PREAMBLE
 
 # ── Configs ───────────────────────────────────────────────────────────────────
