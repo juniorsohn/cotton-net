@@ -262,6 +262,9 @@ networks:
   cotton-overlay:
     driver: overlay
     attachable: true
+    ipam:
+      config:
+        - subnet: 10.0.2.0/20
 PREAMBLE
 
 # ── Configs ───────────────────────────────────────────────────────────────────
@@ -340,6 +343,7 @@ for s in $(seq 1 $SUPERNODOS); do
         mode: host
     networks: [cotton-overlay]
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       placement:
         constraints: [node.hostname == ${COORD_HOST}]
@@ -383,6 +387,7 @@ WS
         mode: host
     networks: [cotton-overlay]
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       placement:
         constraints: [node.hostname == ${host}]
@@ -459,6 +464,7 @@ cat <<CLIENT
   cottonclient:
     image: \${REGISTRY:-localhost:5000}/cottontrust-client:latest
     deploy:
+      endpoint_mode: dnsrr
       replicas: 0
       placement:
         constraints: [node.hostname == ${CONTROL_HOST}]
@@ -490,6 +496,7 @@ cat <<MONITORING
   node-exporter:
     image: prom/node-exporter:v1.8.2
     deploy:
+      endpoint_mode: dnsrr
       mode: global
       resources:
         limits: {cpus: '0.2', memory: 64M}
@@ -512,6 +519,7 @@ cat <<MONITORING
   prometheus:
     image: prom/prometheus:v2.53.4
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       placement:
         constraints: [node.hostname == ${CONTROL_HOST}]
@@ -534,6 +542,7 @@ cat <<MONITORING
   grafana:
     image: grafana/grafana:12.0.0
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       placement:
         constraints: [node.hostname == ${CONTROL_HOST}]
@@ -555,6 +564,7 @@ cat <<MONITORING
   indy-exporter:
     image: \${REGISTRY:-localhost:5000}/indy-exporter:latest
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       placement:
         constraints: [node.hostname == ${CONTROL_HOST}]
