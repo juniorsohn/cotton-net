@@ -260,6 +260,12 @@ async def _init_raft(fsm: CoordinatorFSM):
             addr = entry
         peer_map[num] = addr
 
+    for num, addr in peer_map.items():
+        if num == NODE_NUM:
+            continue
+        host = addr.split(":")[0]
+        await _wait_dns(host, timeout=300)
+
     initial_peers = Peers({})
     for num, addr in peer_map.items():
         initial_peers.add_peer(num, addr, InitialRole.VOTER)

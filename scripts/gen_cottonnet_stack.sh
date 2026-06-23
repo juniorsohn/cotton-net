@@ -309,7 +309,7 @@ for s in $(seq 1 $SUPERNODOS); do
     RAFT_PEERS=""
     for other in $(seq 1 $SUPERNODOS); do
         if (( other != s )); then
-            RAFT_PEERS="${RAFT_PEERS}${other}=${IPS[$((other-1))]}:6006${other},"
+            RAFT_PEERS="${RAFT_PEERS}${other}=coordinator-${other}:60061,"
         fi
     done
     RAFT_PEERS="${RAFT_PEERS%,}"
@@ -427,8 +427,6 @@ NODE
       NODE_ID:        "node-${s}"
       NODE_NUM:       "${s}"
       RAFT_ADDR:      "0.0.0.0:60061"
-      RAFT_HOST:      "${COORD_IP}"
-      RAFT_HOST_PORT: "6006${s}"
       RAFT_PEERS:     "${RAFT_PEERS}"
       GENESIS_URL:    "http://${COORD_IP}:9000/genesis"
       TRUSTEE_DID:  "\${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
