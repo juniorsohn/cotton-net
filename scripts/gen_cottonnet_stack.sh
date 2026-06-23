@@ -407,8 +407,8 @@ NODE
 
   coordinator-${s}:
     image: \${REGISTRY:-localhost:5000}/cottontrust-coordinator:latest
-    endpoint_mode: dnsrr
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       placement:
         constraints: [node.hostname == ${COORD_HOST}]
