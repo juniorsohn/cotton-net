@@ -306,7 +306,7 @@ for s in $(seq 1 $SUPERNODOS); do
     RAFT_PEERS=""
     for other in $(seq 1 $SUPERNODOS); do
         if (( other != s )); then
-            RAFT_PEERS="${RAFT_PEERS}coordinator-${other}:60061,"
+            RAFT_PEERS="${RAFT_PEERS}${IPS[$((other-1))]}:6006${other},"
         fi
     done
     RAFT_PEERS="${RAFT_PEERS%,}"
