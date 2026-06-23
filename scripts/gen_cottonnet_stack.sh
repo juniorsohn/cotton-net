@@ -306,7 +306,7 @@ for s in $(seq 1 $SUPERNODOS); do
     RAFT_PEERS=""
     for other in $(seq 1 $SUPERNODOS); do
         if (( other != s )); then
-            RAFT_PEERS="${RAFT_PEERS}${IPS[$((other-1))]}:6006${other},"
+            RAFT_PEERS="${RAFT_PEERS}${other}=${IPS[$((other-1))]}:6006${other},"
         fi
     done
     RAFT_PEERS="${RAFT_PEERS%,}"
@@ -418,11 +418,13 @@ NODE
       resources:
         limits: {cpus: '2', memory: 1G}
     environment:
-      NODE_ID:      "node-${s}"
-      NODE_NUM:     "${s}"
-      RAFT_ADDR:    "0.0.0.0:60061"
-      RAFT_PEERS:   "${RAFT_PEERS}"
-      GENESIS_URL:  "http://${COORD_IP}:9000/genesis"
+      NODE_ID:        "node-${s}"
+      NODE_NUM:       "${s}"
+      RAFT_ADDR:      "0.0.0.0:60061"
+      RAFT_HOST:      "${COORD_IP}"
+      RAFT_HOST_PORT: "6006${s}"
+      RAFT_PEERS:     "${RAFT_PEERS}"
+      GENESIS_URL:    "http://${COORD_IP}:9000/genesis"
       TRUSTEE_DID:  "\${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
       TRUSTEE_SEED: "\${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
       WALLET_KEY:   "\${WALLET_KEY:-7h3gFmD4QZdGdzt2NDtTg3XZwXFENBa1ogAgwHBxHNpw}"
