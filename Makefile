@@ -295,8 +295,10 @@ cn-deploy-seq:
 cn-stop:
 	@echo "Removendo stack $(CN_STACK)..."
 	-docker stack rm $(CN_STACK)
-	@echo "Aguardando containers encerrarem..."
-	@sleep 10
+	@echo "Aguardando containers e rede encerrarem..."
+	@until ! docker network ls --format '{{.Name}}' | grep -q "^$(CN_STACK)_"; do \
+		printf '.'; sleep 5; \
+	done; echo " rede removida."
 	@echo "Removendo docker configs..."
 	@for s in $$(seq 1 $(SUPERNODOS)); do \
 		docker config rm "cn-gen-tx-sn$${s}-kn$$(( $(NODES) / $(SUPERNODOS) ))"    2>/dev/null || true; \
