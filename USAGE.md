@@ -221,25 +221,34 @@ O comando gera `docker-stack-cottonnet.yml` e cria Docker Configs no Swarm:
 
 ### 6.3 Deploy
 
-```bash
-make cn-deploy
-```
-
-Sobe por supernodo s (s = 1..Sn):
-- `webserver-sn${s}`: na baia do coordinator-s, porta 9000 — genesis do Sn s
-- `cn-sn${s}-node${n}`: nó Indy n do supernodo s, nas 4 baias, `mode: host`
-- `coordinator-${s}`: em cacao, porta 8000+s — RAFT + submissão ao Sn s
-
-Acompanhe o início:
+Use o deploy sequencial — é o fluxo recomendado:
 
 ```bash
-make cn-status
-make cn-genesis
-#   ✅ http://10.10.20.151:9000/genesis   (S1)
-#   ✅ http://10.10.20.152:9000/genesis   (S2)
-#   ✅ http://10.10.20.153:9000/genesis   (S3)
-#   ✅ http://10.10.20.154:9000/genesis   (S4)
+make cn-deploy-seq NODES=16 SUPERNODOS=4
 ```
+
+O deploy sequencial sobe um supernodo por vez, aguardando o genesis
+responder antes de avançar para o próximo. Isso evita a condição de
+corrida onde todos os nós tentam inicializar o ledger simultaneamente
+(contenda no NFS + timeout de genesis nos coordinators).
+
+Saída esperada:
+
+```
+=== Deploy sequencial COTTON-NET: 4 SN × 4 nós ===
+SN2-SN4 pausados. Iniciando sequência...
+
+--- SN1: escalando 4 nós Indy + webserver ---
+Aguardando genesis SN1 em http://10.10.20.151:9000 ....... ✅ SN1 OK
+
+--- SN2: escalando 4 nós Indy + webserver ---
+Aguardando genesis SN2 em http://10.10.20.152:9000 ....... ✅ SN2 OK
+...
+✅ Todos os 4 supernodos com genesis OK
+```
+
+`make cn-deploy` (sem `-seq`) ainda está disponível para subir tudo de
+uma vez, mas pode falhar com Kn alto devido à condição de corrida.
 
 O cluster RAFT precisa de ~10–30s para eleger o líder após todos os
 coordinators subirem.
@@ -345,7 +354,8 @@ make ct-logs-web             Logs do webserver
 
 ── COTTON-NET Distribuído (principal) ───────────────────────────
 make cn-config   NODES=N SUPERNODOS=S  Gera stack + docker configs
-make cn-deploy               Deploy do stack
+make cn-deploy               Deploy simultâneo (todos os SN de uma vez)
+make cn-deploy-seq           Deploy sequencial: um SN por vez (recomendado)
 make cn-stop                 Remove stack, configs e volumes
 make cn-status               Lista serviços e estados
 make cn-genesis              Verifica genesis das 4 baias (:9000)
