@@ -6,63 +6,35 @@ global:
 
 scrape_configs:
 
-  # cAdvisor — métricas de containers por nó (mode: global cobre todas as baias)
-  - job_name: 'cadvisor-baia1'
-    static_configs:
-      - targets: ['baia1:8080']
-        labels: {node: 'baia1', supernodo: 'S1'}
-
-  - job_name: 'cadvisor-baia2'
-    static_configs:
-      - targets: ['baia2:8080']
-        labels: {node: 'baia2', supernodo: 'S2'}
-
-  - job_name: 'cadvisor-baia3'
-    static_configs:
-      - targets: ['baia3:8080']
-        labels: {node: 'baia3', supernodo: 'S3'}
-
-  - job_name: 'cadvisor-baia4'
-    static_configs:
-      - targets: ['baia4:8080']
-        labels: {node: 'baia4', supernodo: 'S4'}
-
-  - job_name: 'cadvisor-baia5'
-    static_configs:
-      - targets: ['baia5:8080']
-        labels: {node: 'baia5', supernodo: 'monitoring'}
-
   # Coordinators — métricas da API FastAPI (latência, throughput, fila, NYMs)
   - job_name: 'coordinators'
     metrics_path: '/metrics'
     static_configs:
       - targets:
-          - 'baia1:8001'
-          - 'baia2:8002'
-          - 'baia3:8003'
-          - 'baia4:8004'
+          - '10.10.20.151:8001'
+          - '10.10.20.152:8002'
+          - '10.10.20.153:8003'
+          - '10.10.20.154:8004'
         labels: {service: 'coordinator'}
 
   # node-exporter — métricas do host (disco, rede, CPU, memória física)
   - job_name: 'node-exporter'
     static_configs:
-      - targets: ['baia1:9100']
-        labels: {node: 'baia1', supernodo: 'S1'}
-      - targets: ['baia2:9100']
-        labels: {node: 'baia2', supernodo: 'S2'}
-      - targets: ['baia3:9100']
-        labels: {node: 'baia3', supernodo: 'S3'}
-      - targets: ['baia4:9100']
-        labels: {node: 'baia4', supernodo: 'S4'}
-      - targets: ['baia5:9100']
-        labels: {node: 'baia5', supernodo: 'monitoring'}
+      - targets: ['10.10.20.151:9100']
+        labels: {node: 'flores', supernodo: 'S1'}
+      - targets: ['10.10.20.152:9100']
+        labels: {node: 'corisco', supernodo: 'S2'}
+      - targets: ['10.10.20.153:9100']
+        labels: {node: 'baiacu', supernodo: 'S3'}
+      - targets: ['10.10.20.154:9100']
+        labels: {node: 'pernambuco', supernodo: 'S4'}
+      - targets: ['10.10.20.155:9100']
+        labels: {node: 'cacao', supernodo: 'monitoring'}
 
-  # Indy Validator Exporter — métricas internas dos nós RBFT (GET_VALIDATOR_INFO)
-  # Scrapes o exporter que roda na baia5 (cacao). Se o serviço estiver down,
-  # Prometheus apenas marca o target como "down" sem afetar os demais jobs.
+  # Indy Validator Exporter — métricas internas dos nós RBFT
   - job_name: 'indy-exporter'
     static_configs:
-      - targets: ['baia5:9309']
+      - targets: ['10.10.20.155:9309']
         labels: {service: 'indy-exporter'}
 
   # Prometheus self-monitoring

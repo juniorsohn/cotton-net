@@ -24,6 +24,8 @@
 
 set -euo pipefail
 
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
 # ── Parâmetros ────────────────────────────────────────────────────────────────
 
 TOTAL_NODES=${1:-16}
@@ -536,6 +538,7 @@ cat <<MONITORING
     networks: [cotton-overlay]
     volumes:
       - prometheus-data:/prometheus
+      - ${PROJECT_DIR}/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
   grafana:
     image: grafana/grafana:12.0.0
@@ -558,6 +561,8 @@ cat <<MONITORING
     networks: [cotton-overlay]
     volumes:
       - grafana-data:/var/lib/grafana
+      - ${PROJECT_DIR}/monitoring/provisioning:/etc/grafana/provisioning:ro
+      - ${PROJECT_DIR}/monitoring/dashboards:/etc/grafana/dashboards:ro
 
   indy-exporter:
     image: \${REGISTRY:-localhost:5000}/indy-exporter:latest
