@@ -57,7 +57,9 @@ from cottontrust_core.identity import create_and_store_did
 NODE_ID      = os.environ["NODE_ID"]
 NODE_NUM     = int(os.environ["NODE_NUM"])   # ID inteiro exigido pelo raftify
 RAFT_ADDR    = os.environ["RAFT_ADDR"]
-RAFT_PEERS   = os.environ.get("RAFT_PEERS", "")
+RAFT_PEERS     = os.environ.get("RAFT_PEERS", "")
+RAFT_HOST      = os.environ.get("RAFT_HOST", "")       # IP físico do host (mode: host)
+RAFT_HOST_PORT = os.environ.get("RAFT_HOST_PORT", "")  # porta host-mode publicada
 GENESIS_URL  = os.environ["GENESIS_URL"]
 TRUSTEE_SEED = os.environ["TRUSTEE_SEED"]
 TRUSTEE_DID  = os.environ["TRUSTEE_DID"]
@@ -241,14 +243,22 @@ async def _init_raft(fsm: CoordinatorFSM):
     # Todos os nós sobem com initial_peers declarando o cluster completo.
     # request_id/join_cluster é para membros dinâmicos — no bootstrap inicial,
     # todos devem participar da eleição ao mesmo tempo.
-    peer_map = {NODE_NUM: f"coordinator-{NODE_NUM}:{raft_port}"}
+    self_addr = (f"{RAFT_HOST}:{RAFT_HOST_PORT}"
+                 if (RAFT_HOST and RAFT_HOST_PORT)
+                 else f"coordinator-{NODE_NUM}:{raft_port}")
+    peer_map = {NODE_NUM: self_addr}
     for entry in RAFT_PEERS.split(","):
         entry = entry.strip()
         if not entry:
             continue
-        host = entry.split(":")[0]
-        num = int(host.split("-")[-1])
-        peer_map[num] = entry
+        if "=" in entry:
+            num_str, addr = entry.split("=", 1)
+            num = int(num_str)
+        else:
+            host = entry.split(":")[0]
+            num = int(host.split("-")[-1])
+            addr = entry
+        peer_map[num] = addr
 
     initial_peers = Peers({})
     for num, addr in peer_map.items():
