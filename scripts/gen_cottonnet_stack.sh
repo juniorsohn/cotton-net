@@ -282,7 +282,6 @@ done
 # ── Volumes ───────────────────────────────────────────────────────────────────
 echo ""
 echo "volumes:"
-echo "  client-output:"
 echo "  client-wallets:"
 echo "  prometheus-data:"
 echo "  grafana-data:"
@@ -479,10 +478,10 @@ cat <<CLIENT
       COORDINATOR_URL:  "\${COORDINATOR_URL:-http://coordinator-1:8000}"
       DATA_DIR:         "/app/data"
       CONCURRENCY:      "\${CONCURRENCY:-1}"
-      METRICS_OUTPUT:   "/app/output/raw_tx_metrics.csv"
+      METRICS_OUTPUT:   "/app/output/cn_n${TOTAL_NODES}_s${SUPERNODOS}.csv"
     networks: [cotton-overlay]
     volumes:
-      - client-output:/app/output
+      - \${RESULTS_DIR:-/mnt/prj/g11718038933/cotton-net_2026/results}:/app/output
       - client-wallets:/app/wallets
       - \${DATA_DIR:-/mnt/prj/g11718038933/cotton-net_2026/data}:/app/data:ro
 CLIENT

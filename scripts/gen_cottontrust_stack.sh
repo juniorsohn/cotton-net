@@ -181,7 +181,6 @@ configs:
 volumes:
   webserver-cli:
   webserver-ledger:
-  client-output:
   client-wallets:
 PREAMBLE
 
@@ -304,10 +303,10 @@ cat <<CLIENT
       COORDINATOR_URL: ""
       DATA_DIR:        "/app/data"
       CONCURRENCY:     "\${CONCURRENCY:-1}"
-      METRICS_OUTPUT:  "/app/output/raw_tx_metrics.csv"
+      METRICS_OUTPUT:  "/app/output/ct_n${TOTAL_NODES}.csv"
     networks: [von]
     volumes:
-      - client-output:/app/output
+      - \${RESULTS_DIR:-/mnt/prj/g11718038933/cotton-net_2026/results}:/app/output
       - client-wallets:/app/wallets
       - \${DATA_DIR:-/mnt/prj/g11718038933/cotton-net_2026/data}:/app/data:ro
 CLIENT
