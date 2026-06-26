@@ -161,6 +161,12 @@ push: build
 	docker push $(REGISTRY)/cottontrust-coordinator:latest
 	docker push $(REGISTRY)/indy-exporter:latest
 
+# Rebuild + push só da imagem do client (CT não usa o coordinator).
+# Útil para iterar no client sem recompilar o raftify do coordinator.
+client-push:
+	docker build -t $(REGISTRY)/cottontrust-client:latest -f client/dockerfile .
+	docker push  $(REGISTRY)/cottontrust-client:latest
+
 deploy:
 	docker stack deploy --resolve-image=never -c docker-compose.yml $(STACK)
 
@@ -341,7 +347,7 @@ cn-logs-coord:
 .PHONY: help swarm-init registry-start \
         von-config von-patch von-local-build von-local-start von-local-stop \
         von-start von-stop von-status \
-        build push deploy teardown client-start client-stop \
+        build push client-push deploy teardown client-start client-stop \
         logs-client logs-coord status experiment \
         ct-config ct-deploy ct-stop ct-status ct-genesis \
         ct-client-start ct-client-stop ct-logs-client ct-logs-web \
