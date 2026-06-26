@@ -17,9 +17,29 @@ Colunas do CSV:
     timestamp:            Data e hora ISO 8601 da transação.
 """
 import csv
+import re
 from datetime import datetime
 from pathlib import Path
 from loguru import logger
+
+
+def next_run_path(base: str | Path) -> Path:
+    """
+    Resolve o caminho final da run anexando o próximo sufixo `_runN` livre.
+
+    A partir de uma base como `/app/output/ct_n64.csv`, varre o diretório
+    procurando `ct_n64_run*.csv` e devolve `ct_n64_run{maior+1}.csv`. Assim
+    cada execução do client gera um arquivo distinto (RUN_1, RUN_2, ...) sem
+    sobrescrever as anteriores e sem precisar gerenciar variáveis de ambiente.
+    """
+    base = Path(base)
+    stem, suffix = base.stem, (base.suffix or ".csv")
+    base.parent.mkdir(parents=True, exist_ok=True)
+    pat = re.compile(rf"^{re.escape(stem)}_run(\d+){re.escape(suffix)}$")
+    used = [int(m.group(1)) for p in base.parent.glob(f"{stem}_run*{suffix}")
+            if (m := pat.match(p.name))]
+    n = (max(used) + 1) if used else 1
+    return base.parent / f"{stem}_run{n}{suffix}"
 
 
 class MetricsCollector:
@@ -40,9 +60,11 @@ class MetricsCollector:
 
     def __init__(self, pool_name: str, output_path: str) -> None:
         self.pool_name = pool_name
-        self.output = Path(output_path)
-        self.output.parent.mkdir(parents=True, exist_ok=True)
+        # Resolve para o próximo arquivo `_runN` livre — cada execução é
+        # registrada separadamente (RUN_1, RUN_2, ...), sem clobber.
+        self.output = next_run_path(output_path)
         self.records: list[dict] = []
+        logger.info(f"Métricas desta run → {self.output}")
 
     def record(
         self,
