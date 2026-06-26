@@ -18,11 +18,48 @@ Referência de migração:
     indy.ledger.build_nym_request()          → indy_vdr.ledger.build_nym_request()
     indy.ledger.sign_and_submit_request()    → sign_and_submit_nym()
 """
+import asyncio
 import urllib.request
 from loguru import logger
 from aries_askar import Store
 import indy_vdr
 from indy_vdr import Pool
+
+
+# Erros transitórios de propagação read-after-write: num pool RBFT grande, um
+# NYM já comitado pode ainda não estar visível no nó que atende a próxima
+# transação dependente (ATTRIB do próprio DID, ou NYM assinado pelo endorser).
+# A verkey aparece assim que a escrita propaga — basta reenviar com backoff.
+_TRANSIENT_MARKERS = ("cannot be found", "could not authenticate")
+
+
+async def _submit_resilient(pool, build, *, label, attempts=6, base_delay=0.5):
+    """
+    Submete uma request ao pool tolerando a janela read-after-write.
+
+    `build` é uma corrotina sem argumentos que constrói E assina a request
+    (reconstruída a cada tentativa para não reutilizar o objeto FFI já consumido).
+    Faz retry com backoff exponencial apenas em erros de propagação transitórios;
+    qualquer outra falha é propagada imediatamente. Devolve (response, request).
+    """
+    last_exc = None
+    for i in range(attempts):
+        request = await build()
+        try:
+            return await pool.submit_request(request), request
+        except Exception as e:
+            last_exc = e
+            transient = any(m in str(e) for m in _TRANSIENT_MARKERS)
+            if transient and i < attempts - 1:
+                delay = base_delay * (2 ** i)
+                logger.warning(
+                    f"Propagação pendente — {label} | tentativa {i + 1}/{attempts}, "
+                    f"retry em {delay:.1f}s | {e}"
+                )
+                await asyncio.sleep(delay)
+                continue
+            raise
+    raise last_exc
 
 
 async def open_pool(genesis_source: str) -> Pool:
@@ -168,16 +205,23 @@ async def submit_attrib(
     Retorna o tamanho em bytes da transacao.
     """
     import json as _json
-    request = indy_vdr.ledger.build_attrib_request(
-        submitter_did=submitter_did,
-        target_did=submitter_did,
-        raw=_json.dumps(raw_attrs, ensure_ascii=False),
-        xhash=None,
-        enc=None,
+    raw = _json.dumps(raw_attrs, ensure_ascii=False)
+
+    async def _build():
+        request = indy_vdr.ledger.build_attrib_request(
+            submitter_did=submitter_did,
+            target_did=submitter_did,
+            raw=raw,
+            xhash=None,
+            enc=None,
+        )
+        await _sign_request(store, submitter_did, request)
+        return request
+
+    response, request = await _submit_resilient(
+        pool, _build, label=f"ATTRIB did={submitter_did}"
     )
     tx_size = len(request.body.encode("utf-8"))
-    await _sign_request(store, submitter_did, request)
-    response = await pool.submit_request(request)
 
     if response.get("op") in ("REQNACK", "REJECT"):
         reason = response.get("reason", "sem detalhes")
@@ -217,23 +261,27 @@ async def submit_nym(
     Raises:
         RuntimeError: Se a transação for rejeitada pelo ledger.
     """
-    request = indy_vdr.ledger.build_nym_request(
-        submitter_did=submitter_did,
-        dest=target_did,
-        verkey=verkey,
-        alias=alias,
-        role=role,
-    )
+    async def _build():
+        request = indy_vdr.ledger.build_nym_request(
+            submitter_did=submitter_did,
+            dest=target_did,
+            verkey=verkey,
+            alias=alias,
+            role=role,
+        )
+        await _sign_request(store, submitter_did, request)
+        return request
 
-    tx_size = len(request.body.encode("utf-8"))
-
-    await _sign_request(store, submitter_did, request)
     try:
-        response = await pool.submit_request(request)
+        response, request = await _submit_resilient(
+            pool, _build, label=f"NYM did={target_did}"
+        )
     except Exception as e:
         raise RuntimeError(
             f"Transação rejeitada pelo ledger | did={target_did} motivo={e}"
         ) from e
+
+    tx_size = len(request.body.encode("utf-8"))
 
     if response.get("op") == "REQNACK" or response.get("op") == "REJECT":
         reason = response.get("reason", "sem detalhes")
