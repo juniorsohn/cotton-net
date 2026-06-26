@@ -40,13 +40,17 @@ async def _submit_resilient(pool, build, *, label, attempts=6, base_delay=0.5):
     `build` é uma corrotina sem argumentos que constrói E assina a request
     (reconstruída a cada tentativa para não reutilizar o objeto FFI já consumido).
     Faz retry com backoff exponencial apenas em erros de propagação transitórios;
-    qualquer outra falha é propagada imediatamente. Devolve (response, request).
+    qualquer outra falha é propagada imediatamente. Devolve (response, tx_size).
+
+    Importante: `request.body` é lido ANTES do submit — o indy-vdr libera o
+    handle da request ao submeter, então acessá-lo depois daria "no request handle".
     """
     last_exc = None
     for i in range(attempts):
         request = await build()
+        tx_size = len(request.body.encode("utf-8"))
         try:
-            return await pool.submit_request(request), request
+            return await pool.submit_request(request), tx_size
         except Exception as e:
             last_exc = e
             transient = any(m in str(e) for m in _TRANSIENT_MARKERS)
@@ -218,10 +222,9 @@ async def submit_attrib(
         await _sign_request(store, submitter_did, request)
         return request
 
-    response, request = await _submit_resilient(
+    response, tx_size = await _submit_resilient(
         pool, _build, label=f"ATTRIB did={submitter_did}"
     )
-    tx_size = len(request.body.encode("utf-8"))
 
     if response.get("op") in ("REQNACK", "REJECT"):
         reason = response.get("reason", "sem detalhes")
@@ -273,15 +276,13 @@ async def submit_nym(
         return request
 
     try:
-        response, request = await _submit_resilient(
+        response, tx_size = await _submit_resilient(
             pool, _build, label=f"NYM did={target_did}"
         )
     except Exception as e:
         raise RuntimeError(
             f"Transação rejeitada pelo ledger | did={target_did} motivo={e}"
         ) from e
-
-    tx_size = len(request.body.encode("utf-8"))
 
     if response.get("op") == "REQNACK" or response.get("op") == "REJECT":
         reason = response.get("reason", "sem detalhes")
