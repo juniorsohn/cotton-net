@@ -239,7 +239,7 @@ async def submit_nym(
     store: Store,
     submitter_did: str,
     target_did: str,
-    verkey: str,
+    verkey: str | None,
     alias: str | None = None,
     role: str | None = None,
 ) -> tuple[dict, int]:
