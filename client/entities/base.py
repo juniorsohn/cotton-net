@@ -55,6 +55,24 @@ class CottonCell:
     verkey: str   = field(default="", init=False, repr=False)
     wallet: object = field(default=None, init=False, repr=False)
 
+    def _record_tx(self, metrics, operation: str, mode: str,
+                   stats: dict, size: int) -> None:
+        """Registra UMA transação de ledger (modo direto) como linha própria.
+
+        `stats` é o canal lateral preenchido por submit_nym/submit_attrib com
+        o round-trip real (`elapsed`) e o nº de `retries`. Permite análise de
+        latência por-transação (cada NYM/ATTRIB), não por fluxo de entidade.
+        """
+        metrics.record(
+            operation=operation,
+            mode=mode,
+            tx_time_sec=stats.get("elapsed", 0.0),
+            tx_size_bytes=size,
+            retries=stats.get("retries", 0),
+            entity_id=str(self.entity_id),
+            entity_type=self.entity_type,
+        )
+
     async def setup(
         self,
         pool,
@@ -129,15 +147,19 @@ class CottonCell:
             # Passo A: endorser (pai) registra o filho como IDENTITY_OWNER.
             # auth_map: add_new_endorser exige STEWARD/TRUSTEE — um ENDORSER
             # nao pode conceder role=ENDORSER a outro DID. Por isso role=None aqui.
+            st = {}
             try:
-                _, tx_size = await submit_nym(
+                _, nym_size = await submit_nym(
                     pool=pool,
                     store=endorser_store,
                     submitter_did=endorser_did,
                     target_did=self.did,
                     verkey=self.verkey,
                     role=None,
+                    stats=st,
                 )
+                tx_size += nym_size
+                self._record_tx(metrics, "nym_create", "endorsed", st, nym_size)
             except RuntimeError as e:
                 # "can not touch verkey": re-run idempotente (o DID já existe com
                 # esta verkey). NÃO mascarar "UnauthorizedClientRequest": isso é
@@ -159,6 +181,7 @@ class CottonCell:
             # endossar Talhões). Edição só-de-role usa verkey=None.
             ledger_role = getattr(self, "_ledger_role", None)
             if ledger_role and trustee_store and trustee_did:
+                st = {}
                 try:
                     _, role_tx = await submit_nym(
                         pool=pool,
@@ -167,23 +190,29 @@ class CottonCell:
                         target_did=self.did,
                         verkey=None,
                         role=ledger_role,
+                        stats=st,
                     )
                     tx_size += role_tx
+                    self._record_tx(metrics, "nym_role", "endorsed", st, role_tx)
                 except RuntimeError as e:
                     if "can not touch verkey" in str(e):
                         logger.debug(f"Role já atribuído, ignorando | did={self.did}")
                     else:
                         raise
         else:
+            st = {}
             try:
-                _, tx_size = await submit_nym(
+                _, nym_size = await submit_nym(
                     pool=pool,
                     store=trustee_store,
                     submitter_did=trustee_did,
                     target_did=self.did,
                     verkey=self.verkey,
                     role=getattr(self, "_ledger_role", None),
+                    stats=st,
                 )
+                tx_size += nym_size
+                self._record_tx(metrics, "nym_create", "direto", st, nym_size)
             except RuntimeError as e:
                 if "can not touch verkey" in str(e) or "UnauthorizedClientRequest" in str(e):
                     logger.debug(f"DID já registrado no ledger, ignorando | did={self.did}")
@@ -198,13 +227,19 @@ class CottonCell:
             if endorser_did:
                 public_meta["endorser_did"] = endorser_did
             if public_meta:
+                st = {}
                 attrib_size = await submit_attrib(
                     pool=pool,
                     store=self.wallet,
                     submitter_did=self.did,
                     raw_attrs={self.entity_type: public_meta},
+                    stats=st,
                 )
                 tx_size += attrib_size
+                self._record_tx(
+                    metrics, "attrib",
+                    "endorsed" if endorser_did else "direto", st, attrib_size,
+                )
 
         # 5. Armazena metadados na wallet
         if self.metadata:
@@ -224,15 +259,32 @@ class CottonCell:
         else:
             mode = "direto"
 
-        metrics.record(
-            operation=f"create_{self.entity_type}",
-            tx_time_sec=total_time,
-            tx_size_bytes=tx_size,
-            mode=mode,
-            setup_time_sec=setup_time,
-            coordinator_time_sec=coordinator_time,
-            entity_id=str(self.entity_id),
-        )
+        if coordinator_url:
+            # Modo CN: uma métrica por entidade — o timing real por-escrita
+            # (queue_wait/indy_time no FSM) é preenchido depois em main.py via
+            # get_entity_timing(). Granularidade por-transação do CN vive no FSM.
+            metrics.record(
+                operation=f"create_{self.entity_type}",
+                tx_time_sec=total_time,
+                tx_size_bytes=tx_size,
+                mode=mode,
+                setup_time_sec=setup_time,
+                coordinator_time_sec=coordinator_time,
+                entity_id=str(self.entity_id),
+                entity_type=self.entity_type,
+            )
+        else:
+            # Modo direto (CT): cada escrita já virou uma linha acima.
+            # Registra o setup local (wallet + DID) como sua própria linha.
+            metrics.record(
+                operation="setup_local",
+                tx_time_sec=setup_time,
+                tx_size_bytes=0,
+                mode=mode,
+                setup_time_sec=setup_time,
+                entity_id=str(self.entity_id),
+                entity_type=self.entity_type,
+            )
 
         logger.info(
             f"{self.entity_type.upper()} registrado [{mode}] | "

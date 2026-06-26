@@ -19,6 +19,7 @@ Referência de migração:
     indy.ledger.sign_and_submit_request()    → sign_and_submit_nym()
 """
 import asyncio
+import time
 import urllib.request
 from loguru import logger
 from aries_askar import Store
@@ -33,7 +34,7 @@ from indy_vdr import Pool
 _TRANSIENT_MARKERS = ("cannot be found", "could not authenticate")
 
 
-async def _submit_resilient(pool, build, *, label, attempts=6, base_delay=0.5):
+async def _submit_resilient(pool, build, *, label, attempts=6, base_delay=0.5, stats=None):
     """
     Submete uma request ao pool tolerando a janela read-after-write.
 
@@ -41,6 +42,11 @@ async def _submit_resilient(pool, build, *, label, attempts=6, base_delay=0.5):
     (reconstruída a cada tentativa para não reutilizar o objeto FFI já consumido).
     Faz retry com backoff exponencial apenas em erros de propagação transitórios;
     qualquer outra falha é propagada imediatamente. Devolve (response, tx_size).
+
+    Se `stats` (dict) for fornecido, preenche `elapsed` (segundos do round-trip
+    BEM-SUCEDIDO ao pool, sem contar os sleeps de retry) e `retries` (nº de
+    tentativas que falharam antes do sucesso). Canal lateral para métrica
+    por-transação sem alterar o retorno (não quebra os chamadores do coordinator).
 
     Importante: `request.body` é lido ANTES do submit — o indy-vdr libera o
     handle da request ao submeter, então acessá-lo depois daria "no request handle".
@@ -50,7 +56,12 @@ async def _submit_resilient(pool, build, *, label, attempts=6, base_delay=0.5):
         request = await build()
         tx_size = len(request.body.encode("utf-8"))
         try:
-            return await pool.submit_request(request), tx_size
+            t0 = time.monotonic()
+            response = await pool.submit_request(request)
+            if stats is not None:
+                stats["elapsed"] = round(time.monotonic() - t0, 6)
+                stats["retries"] = i
+            return response, tx_size
         except Exception as e:
             last_exc = e
             transient = any(m in str(e) for m in _TRANSIENT_MARKERS)
@@ -200,6 +211,7 @@ async def submit_attrib(
     store: Store,
     submitter_did: str,
     raw_attrs: dict,
+    stats: dict | None = None,
 ) -> int:
     """
     Escreve atributos publicos de um DID no ledger via ATTRIB transaction.
@@ -223,7 +235,7 @@ async def submit_attrib(
         return request
 
     response, tx_size = await _submit_resilient(
-        pool, _build, label=f"ATTRIB did={submitter_did}"
+        pool, _build, label=f"ATTRIB did={submitter_did}", stats=stats
     )
 
     if response.get("op") in ("REQNACK", "REJECT"):
@@ -242,6 +254,7 @@ async def submit_nym(
     verkey: str | None,
     alias: str | None = None,
     role: str | None = None,
+    stats: dict | None = None,
 ) -> tuple[dict, int]:
     """
     Constrói, assina e submete um NYM request ao ledger.
@@ -277,7 +290,7 @@ async def submit_nym(
 
     try:
         response, tx_size = await _submit_resilient(
-            pool, _build, label=f"NYM did={target_did}"
+            pool, _build, label=f"NYM did={target_did}", stats=stats
         )
     except Exception as e:
         raise RuntimeError(

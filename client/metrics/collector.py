@@ -1,19 +1,28 @@
 """
 Coletor de métricas de desempenho do COTTONTRUST.
 
-Registra em memória as métricas de cada transação blockchain
-e as exporta para CSV ao final da execução.
+No modo direto (CT) cada linha do CSV é UMA transação no ledger — entidades
+fazem números diferentes de escritas (setor=3: nym_create+nym_role+attrib;
+demais=2), então medir por-fluxo misturava unidades desiguais. O total por
+entidade é reconstruível agrupando por entity_id. No modo coordinator (CN)
+há uma linha por entidade (o timing por-escrita vive no FSM do coordinator).
 
 Colunas do CSV:
     pool:                 Nome do pool/supernodo (hostname do genesis URL).
-    operation:            Tipo da operação (create_uba, create_bale, etc.).
-    mode:                 Modo de operação ("coordinator" ou "direct").
-    entity_num:           Número de sequência global da transação (1, 2, 3...).
-    tx_time_sec:          Tempo total da transação (E2E do cliente).
+    operation:            nym_create | nym_role | attrib | setup_local
+                          (ou create_<tipo> no modo coordinator).
+    mode:                 "direto" | "endorsed" | "coordinator".
+    entity_num:           Número de sequência global da linha (1, 2, 3...).
+    entity_type:          Nível da entidade (setor, talhao, fardinho, ...).
+    entity_id:            ID da entidade dona desta transação (para group-by).
+    tx_time_sec:          Round-trip da transação (modo direto: só o submit,
+                          sem os sleeps de retry).
     setup_time_sec:       Fase local: criação da wallet + geração do DID.
     coordinator_time_sec: Fase de rede+RAFT: HTTP POST até resposta do Coordinator.
-                          Zero no modo "direct".
-    tx_size_bytes:        Tamanho do payload NYM (zero no modo coordinator).
+    queue_wait_sec:       Espera na fila do FSM (modo coordinator).
+    indy_time_sec:        Escrita efetiva no Indy do supernodo (modo coordinator).
+    tx_size_bytes:        Tamanho do payload da transação em bytes.
+    retries:              Retentativas read-after-write antes do sucesso.
     timestamp:            Data e hora ISO 8601 da transação.
 """
 import csv
@@ -53,9 +62,9 @@ class MetricsCollector:
     """
 
     HEADERS = [
-        "pool", "operation", "mode", "entity_num", "entity_id",
+        "pool", "operation", "mode", "entity_num", "entity_type", "entity_id",
         "tx_time_sec", "setup_time_sec", "coordinator_time_sec",
-        "queue_wait_sec", "indy_time_sec", "tx_size_bytes", "timestamp",
+        "queue_wait_sec", "indy_time_sec", "tx_size_bytes", "retries", "timestamp",
     ]
 
     def __init__(self, pool_name: str, output_path: str) -> None:
@@ -75,25 +84,35 @@ class MetricsCollector:
         setup_time_sec: float = 0.0,
         coordinator_time_sec: float = 0.0,
         entity_id: str = "",
+        entity_type: str = "",
         queue_wait_sec: float = 0.0,
         indy_time_sec: float = 0.0,
+        retries: int = 0,
     ) -> None:
         """
-        Registra uma métrica de transação em memória.
+        Registra uma métrica em memória.
+
+        No modo direto (CT) cada linha é UMA transação no ledger
+        (operation = nym_create / nym_role / attrib / setup_local), o que
+        permite analisar a latência por-transação — entidades fazem números
+        diferentes de escritas (setor=3, demais=2). O total por entidade é
+        reconstruível agrupando por entity_id.
 
         Args:
-            operation:            Nome da operação (ex: 'create_uba').
-            tx_time_sec:          Duração E2E da transação em segundos.
-            tx_size_bytes:        Tamanho do payload NYM em bytes.
-            mode:                 "coordinator" ou "direct".
-            setup_time_sec:       Tempo das operações locais (wallet + DID).
-            coordinator_time_sec: Tempo do POST HTTP ao Coordinator (RAFT).
+            operation:    Operação (nym_create, nym_role, attrib, setup_local,
+                          ou create_<tipo> no modo coordinator).
+            tx_time_sec:  Round-trip da transação (no modo direto, só o submit).
+            tx_size_bytes:Tamanho do payload em bytes.
+            mode:         "direto" | "endorsed" | "coordinator".
+            entity_type:  Nível da entidade (setor, talhao, fardinho, ...).
+            retries:      Tentativas de retry antes do sucesso (read-after-write).
         """
         entry = {
             "pool":                 self.pool_name,
             "operation":            operation,
             "mode":                 mode,
             "entity_num":           len(self.records) + 1,
+            "entity_type":          entity_type,
             "entity_id":            entity_id,
             "tx_time_sec":          round(tx_time_sec, 6),
             "setup_time_sec":       round(setup_time_sec, 6),
@@ -101,6 +120,7 @@ class MetricsCollector:
             "queue_wait_sec":       round(queue_wait_sec, 6),
             "indy_time_sec":        round(indy_time_sec, 6),
             "tx_size_bytes":        tx_size_bytes,
+            "retries":              retries,
             "timestamp":            datetime.now().isoformat(),
         }
         self.records.append(entry)
