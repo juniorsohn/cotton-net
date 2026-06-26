@@ -139,7 +139,10 @@ class CottonCell:
                     role=None,
                 )
             except RuntimeError as e:
-                if "can not touch verkey" in str(e) or "UnauthorizedClientRequest" in str(e):
+                # "can not touch verkey": re-run idempotente (o DID já existe com
+                # esta verkey). NÃO mascarar "UnauthorizedClientRequest": isso é
+                # rejeição de auth real (ex.: endorser inválido) e precisa estourar.
+                if "can not touch verkey" in str(e):
                     logger.debug(f"DID já registrado no ledger, ignorando | did={self.did}")
                 else:
                     raise
@@ -147,6 +150,13 @@ class CottonCell:
             # Passo B: Trustee concede role=ENDORSER se a entidade precisa
             # endossar filhos (ex.: Setor endossa Talhões). Apenas STEWARD/TRUSTEE
             # podem fazer isso (auth_map: add_new_endorser / edit_role → ENDORSER).
+            #
+            # IMPORTANTE: é uma EDIÇÃO de role num DID que já existe (criado no
+            # Passo A). NÃO reenviar a verkey — no Indy só o dono pode tocar a
+            # própria verkey; o trustee reenviando verkey=self.verkey faz o ledger
+            # rejeitar a transação inteira com "can not touch verkey", e o role
+            # nunca é aplicado (o setor fica IDENTITY_OWNER e não consegue
+            # endossar Talhões). Edição só-de-role usa verkey=None.
             ledger_role = getattr(self, "_ledger_role", None)
             if ledger_role and trustee_store and trustee_did:
                 try:
@@ -155,7 +165,7 @@ class CottonCell:
                         store=trustee_store,
                         submitter_did=trustee_did,
                         target_did=self.did,
-                        verkey=self.verkey,
+                        verkey=None,
                         role=ledger_role,
                     )
                     tx_size += role_tx
