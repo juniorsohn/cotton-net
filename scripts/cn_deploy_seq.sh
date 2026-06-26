@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Deploy sequencial COTTON-NET: um supernodo por vez.
+# Webservers sobem junto com o deploy e ficam em 503 até o pool estar pronto.
+# Apenas os nós Indy são congelados e liberados sequencialmente.
+#
 # Uso: ./scripts/cn_deploy_seq.sh NODES SUPERNODOS [STACK]
 #   Ex: ./scripts/cn_deploy_seq.sh 128 4
 set -euo pipefail
@@ -15,32 +18,30 @@ echo "=== Deploy sequencial COTTON-NET: ${SUPERNODOS} SN × ${KN} nós ==="
 
 docker stack deploy --resolve-image=never -c docker-stack-cottonnet.yml "${CN_STACK}"
 
-echo "Pausando SN2..SN${SUPERNODOS} antes que os containers iniciem..."
+# Pausa apenas os nós Indy de SN2..SN_N. Os webservers sobem imediatamente
+# e respondem 503 enquanto aguardam o pool — sem afetar a sequência.
+echo "Pausando nós Indy de SN2..SN${SUPERNODOS}..."
 for s in $(seq 2 "${SUPERNODOS}"); do
     (
         for n in $(seq 1 "${KN}"); do
             docker service update --replicas=0 --detach \
                 "${CN_STACK}_cn-sn${s}-node${n}" >/dev/null 2>&1
         done
-        docker service update --replicas=0 --detach \
-            "${CN_STACK}_webserver-sn${s}" >/dev/null 2>&1
-        echo "SN${s} pausado."
+        echo "  SN${s} pausado."
     ) &
 done
 wait
 
 echo ""
-echo "SN2-SN${SUPERNODOS} pausados. Iniciando sequência..."
+echo "Sequência de subida iniciada..."
 
 for s in $(seq 1 "${SUPERNODOS}"); do
     echo ""
-    echo "=== SN${s}: escalando ${KN} nós Indy + webserver ==="
+    echo "=== SN${s}: escalando ${KN} nós Indy ==="
     for n in $(seq 1 "${KN}"); do
         docker service update --replicas=1 --detach \
             "${CN_STACK}_cn-sn${s}-node${n}" >/dev/null 2>&1
     done
-    docker service update --replicas=1 --detach \
-        "${CN_STACK}_webserver-sn${s}" >/dev/null 2>&1
 
     WEBIP="${BAIA_IPS[$(( s - 1 ))]}"
     echo "Aguardando genesis SN${s} em http://${WEBIP}:9000 ..."
