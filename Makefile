@@ -213,10 +213,15 @@ ct-deploy:
 ct-stop:
 	@echo "Removendo stack $(CT_STACK)..."
 	-docker stack rm $(CT_STACK)
-	@echo "Removendo docker config (se existir)..."
-	-docker config rm von-gen-tx-n$(NODES) 2>/dev/null || true
-	@echo "Aguardando containers encerrarem..."
-	@sleep 10
+	@echo "Removendo docker configs von-gen-tx-* (independente de NODES)..."
+	-docker config ls -q --filter name=von-gen-tx-n 2>/dev/null | xargs -r docker config rm 2>/dev/null || true
+	@echo "Aguardando o stack encerrar completamente (poll local, sem SSH)..."
+	@for i in $$(seq 1 60); do \
+		n=$$(docker stack ps $(CT_STACK) -q 2>/dev/null | wc -l); \
+		[ "$$n" -eq 0 ] && break; \
+		sleep 2; \
+	done
+	@sleep 5
 	@echo "Removendo volumes de ledger (cacao)..."
 	-ssh $(SSH_USER)@$(BAIA5_IP) \
 		"docker volume rm $(CT_STACK)_webserver-ledger $(CT_STACK)_webserver-cli \
