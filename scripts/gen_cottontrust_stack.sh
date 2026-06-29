@@ -173,6 +173,9 @@ networks:
   von:
     driver: overlay
     attachable: true
+    ipam:
+      config:
+        - subnet: 10.20.0.0/20   # /20 = 4094 IPs; /24 (default) esgota com 128 nós + churn de --force
 
 configs:
   ${CONFIG_NAME}:
