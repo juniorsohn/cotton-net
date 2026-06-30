@@ -307,15 +307,20 @@ cn-deploy-seq:
 cn-stop:
 	@echo "Removendo stack $(CN_STACK)..."
 	-docker stack rm $(CN_STACK)
-	@echo "Aguardando containers e rede encerrarem..."
-	@until ! docker network ls --format '{{.Name}}' | grep -q "^$(CN_STACK)_"; do \
-		printf '.'; sleep 5; \
-	done; echo " rede removida."
-	@echo "Removendo docker configs..."
-	@for s in $$(seq 1 $(SUPERNODOS)); do \
-		docker config rm "cn-gen-tx-sn$${s}-kn$$(( $(NODES) / $(SUPERNODOS) ))"    2>/dev/null || true; \
-		docker config rm "cn-start-node-sn$${s}-kn$$(( $(NODES) / $(SUPERNODOS) ))" 2>/dev/null || true; \
+	@echo "Aguardando tasks encerrarem (poll com timeout)..."
+	@for i in $$(seq 1 60); do \
+		n=$$(docker stack ps $(CN_STACK) -q 2>/dev/null | wc -l); \
+		[ "$$n" -eq 0 ] && break; \
+		printf '.'; sleep 3; \
+	done; echo
+	@echo "Varrendo containers cn_ órfãos em cada baia (libera portas host, ex.: 9000)..."
+	@for ip in $(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP) $(BAIA5_IP); do \
+		ssh $(SSH_USER)@$$ip \
+			"docker ps -aq --filter name=$(CN_STACK)_ | xargs -r docker rm -f 2>/dev/null || true"; \
 	done
+	@echo "Removendo configs (por filtro de nome, independente de NODES)..."
+	-docker config ls -q --filter name=cn-gen-tx-sn    2>/dev/null | xargs -r docker config rm 2>/dev/null || true
+	-docker config ls -q --filter name=cn-start-node-sn 2>/dev/null | xargs -r docker config rm 2>/dev/null || true
 	@echo "Removendo volumes das baias..."
 	@for ip in $(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP) $(BAIA5_IP); do \
 		ssh $(SSH_USER)@$$ip \
