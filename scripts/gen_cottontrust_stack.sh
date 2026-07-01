@@ -62,6 +62,7 @@ IPS_LIST="${IPS_LIST%,}"
 # ── Caminhos de saída ─────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUTPUT="${SCRIPT_DIR}/../docker-stack-cottontrust.yml"
 CONFIG_NAME="von-gen-tx-n${TOTAL_NODES}"
 
@@ -185,6 +186,8 @@ volumes:
   webserver-cli:
   webserver-ledger:
   client-wallets:
+  prometheus-data:
+  grafana-data:
 PREAMBLE
 
 for i in $(seq 1 $TOTAL_NODES); do
@@ -313,6 +316,111 @@ cat <<CLIENT
       - client-wallets:/app/wallets
       - \${DATA_DIR:-/mnt/prj/g11718038933/cotton-net_2026/data}:/app/data:ro
 CLIENT
+
+# ── Monitoramento ─────────────────────────────────────────────────────────────
+# Mesmo conjunto do CN (node-exporter + prometheus + grafana + indy-exporter),
+# mas na rede 'von' e com o indy-exporter apontado ao genesis do CT. O CT não
+# tem coordinators, então o job 'coordinators' do prometheus.yml fica "down"
+# (inofensivo) e os painéis de RAFT/FSM ficam vazios — os de host/Indy funcionam.
+cat <<MONITORING
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    deploy:
+      endpoint_mode: dnsrr
+      mode: global
+      resources:
+        limits: {cpus: '0.2', memory: 64M}
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)(\$\$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    ports:
+      - target: 9100
+        published: 9100
+        protocol: tcp
+        mode: host
+    networks: [von]
+
+  prometheus:
+    image: prom/prometheus:v2.53.4
+    deploy:
+      endpoint_mode: dnsrr
+      replicas: 1
+      placement:
+        constraints: [node.hostname == ${CONTROL_HOST}]
+      resources:
+        limits: {cpus: '1', memory: 512M}
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    ports:
+      - target: 9090
+        published: 9091
+        protocol: tcp
+        mode: host
+    networks: [von]
+    volumes:
+      - prometheus-data:/prometheus
+      - ${PROJECT_DIR}/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:12.0.0
+    deploy:
+      endpoint_mode: dnsrr
+      replicas: 1
+      placement:
+        constraints: [node.hostname == ${CONTROL_HOST}]
+      resources:
+        limits: {cpus: '1', memory: 512M}
+    environment:
+      GF_SECURITY_ADMIN_USER:     "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "\${GRAFANA_PASSWORD:-cottontrust}"
+      GF_USERS_ALLOW_SIGN_UP:     "false"
+    ports:
+      - target: 3000
+        published: 3002
+        protocol: tcp
+        mode: host
+    networks: [von]
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ${PROJECT_DIR}/monitoring/provisioning:/etc/grafana/provisioning:ro
+      - ${PROJECT_DIR}/monitoring/dashboards:/etc/grafana/dashboards:ro
+
+  indy-exporter:
+    image: \${REGISTRY:-localhost:5000}/indy-exporter:latest
+    deploy:
+      endpoint_mode: dnsrr
+      replicas: 1
+      placement:
+        constraints: [node.hostname == ${CONTROL_HOST}]
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+      resources:
+        limits: {cpus: '0.2', memory: 128M}
+    environment:
+      GENESIS_URL:     "http://${CONTROL_IP}:9000/genesis"
+      TRUSTEE_DID:     "\${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
+      TRUSTEE_SEED:    "\${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
+      SCRAPE_INTERVAL: "30"
+      SUBMIT_TIMEOUT:  "15"
+      LOG_LEVEL:       "\${LOG_LEVEL:-INFO}"
+    ports:
+      - target: 9309
+        published: 9309
+        protocol: tcp
+        mode: host
+    networks: [von]
+MONITORING
 
 } > "${OUTPUT}"
 
