@@ -199,9 +199,9 @@ define run_client_n
 	echo "══ $$svc — $(RUNS) run(s) (volumes preservados; CSV runN automático) ══"; \
 	for i in $$(seq 1 $(RUNS)); do \
 	  echo "── run $$i/$(RUNS) ──"; \
-	  docker service scale $$svc=0 >/dev/null 2>&1 || true; \
+	  docker service scale --detach $$svc=0 >/dev/null 2>&1 || true; \
 	  prev=$$(docker service ps $$svc -q --no-trunc 2>/dev/null | head -1); \
-	  docker service scale $$svc=1 >/dev/null; \
+	  docker service scale --detach $$svc=1 >/dev/null; \
 	  echo "   aguardando nova task iniciar..."; \
 	  until cur=$$(docker service ps $$svc -q --no-trunc 2>/dev/null | head -1); \
 	        [ -n "$$cur" ] && [ "$$cur" != "$$prev" ]; do sleep 2; done; \
@@ -210,11 +210,11 @@ define run_client_n
 	    st=$$(docker service ps $$svc --no-trunc --format '{{.CurrentState}}' 2>/dev/null | head -1); \
 	    case "$$st" in \
 	      Complete*) echo "   run $$i OK ($$st)"; break ;; \
-	      Failed*|Rejected*) echo "   run $$i FALHOU: $$st"; docker service scale $$svc=0 >/dev/null 2>&1 || true; exit 1 ;; \
+	      Failed*|Rejected*) echo "   run $$i FALHOU: $$st"; docker service scale --detach $$svc=0 >/dev/null 2>&1 || true; exit 1 ;; \
 	      *) sleep $(POLL) ;; \
 	    esac; \
 	  done; \
-	  docker service scale $$svc=0 >/dev/null; sleep 2; \
+	  docker service scale --detach $$svc=0 >/dev/null; sleep 2; \
 	  csv=$$(ls -t $(RESULTS_DIR)/*.csv 2>/dev/null | head -1); \
 	  if [ -n "$$csv" ]; then \
 	    echo "   analisando $$csv"; \
