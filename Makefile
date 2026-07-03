@@ -80,6 +80,7 @@ help:
 	@echo "  status                  Status do stack COTTON-NET"
 	@echo "  client-start            Inicia cottonclient COTTON-NET (0 → 1)"
 	@echo "  client-stop             Para cottonclient COTTON-NET  (1 → 0)"
+	@echo "  client-10runs RUNS=N    N runs seq. (CSV runN + analyze_metrics report)"
 	@echo "  experiment NODES=N      von-start + deploy de uma vez"
 	@echo ""
 	@echo "  ── COTTONTRUST Distribuído (Indy puro, multi-máquina) ──"
@@ -90,6 +91,7 @@ help:
 	@echo "  ct-genesis              Verifica genesis no webserver (cacao:9000)"
 	@echo "  ct-client-start         Inicia cottonclient distribuído (0 → 1)"
 	@echo "  ct-client-stop          Para cottonclient distribuído  (1 → 0)"
+	@echo "  ct-client-10runs RUNS=N N runs seq. (CSV runN + analyze_metrics report)"
 	@echo "  ct-logs-client          Logs do cottonclient"
 	@echo "  ct-logs-web             Logs do webserver"
 	@echo ""
@@ -102,6 +104,7 @@ help:
 	@echo "  cn-genesis              Verifica genesis de cada baia (S_n×:9000)"
 	@echo "  cn-client-start         Inicia cottonclient COTTON-NET (0 → 1)"
 	@echo "  cn-client-stop          Para cottonclient COTTON-NET  (1 → 0)"
+	@echo "  cn-client-10runs RUNS=N N runs seq. (CSV runN + analyze_metrics report)"
 	@echo "  cn-logs-client          Logs do cottonclient"
 	@echo "  cn-logs-coord NODE=N    Logs do coordinator-N"
 	@echo ""
@@ -179,6 +182,54 @@ client-start:
 client-stop:
 	docker service scale $(STACK)_cottonclient=0
 
+# ── Driver de N runs sequenciais do cottonclient ──────────────────────────────
+# Escala 0→1, espera a task COMPLETAR (exit 0), escala 1→0 e repete RUNS vezes.
+# NÃO limpa volumes: o collector usa next_run_path(), então cada execução grava
+# um CSV novo (..._run1.csv, ..._run2.csv, ...) no volume *_client-output.
+# Uso: make ct-client-10runs            (10 por padrão)
+#      make cn-client-10runs RUNS=5     (override do nº de runs)
+# Ctrl-C interrompe; a task em curso é encerrada no próximo scale=0.
+RUNS ?= 10
+POLL ?= 5
+# RESULTS_DIR: mesmo host-dir que os stacks CT/CN montam em /app/output (bind).
+# Após cada run, roda analyze_metrics.py no CSV recém-gerado → grava .report.md.
+RESULTS_DIR ?= /mnt/prj/g11718038933/cotton-net_2026/results
+define run_client_n
+	@set -e; svc=$(1)_cottonclient; \
+	echo "══ $$svc — $(RUNS) run(s) (volumes preservados; CSV runN automático) ══"; \
+	for i in $$(seq 1 $(RUNS)); do \
+	  echo "── run $$i/$(RUNS) ──"; \
+	  docker service scale $$svc=0 >/dev/null 2>&1 || true; \
+	  prev=$$(docker service ps $$svc -q --no-trunc 2>/dev/null | head -1); \
+	  docker service scale $$svc=1 >/dev/null; \
+	  echo "   aguardando nova task iniciar..."; \
+	  until cur=$$(docker service ps $$svc -q --no-trunc 2>/dev/null | head -1); \
+	        [ -n "$$cur" ] && [ "$$cur" != "$$prev" ]; do sleep 2; done; \
+	  echo "   task $${cur:0:12} rodando; aguardando concluir..."; \
+	  while :; do \
+	    st=$$(docker service ps $$svc --no-trunc --format '{{.CurrentState}}' 2>/dev/null | head -1); \
+	    case "$$st" in \
+	      Complete*) echo "   run $$i OK ($$st)"; break ;; \
+	      Failed*|Rejected*) echo "   run $$i FALHOU: $$st"; docker service scale $$svc=0 >/dev/null 2>&1 || true; exit 1 ;; \
+	      *) sleep $(POLL) ;; \
+	    esac; \
+	  done; \
+	  docker service scale $$svc=0 >/dev/null; sleep 2; \
+	  csv=$$(ls -t $(RESULTS_DIR)/*.csv 2>/dev/null | head -1); \
+	  if [ -n "$$csv" ]; then \
+	    echo "   analisando $$csv"; \
+	    python3 scripts/analyze_metrics.py "$$csv" --md "$${csv%.csv}.report.md" \
+	      || echo "   [aviso] analyze_metrics.py falhou em $$csv"; \
+	  else \
+	    echo "   [aviso] nenhum CSV em $(RESULTS_DIR) (stack base usa volume nomeado — ajuste RESULTS_DIR)"; \
+	  fi; \
+	done; \
+	echo "══ concluído: $(RUNS) run(s). CSVs+reports em $(RESULTS_DIR) ══"
+endef
+
+client-10runs:
+	$(call run_client_n,$(STACK))
+
 NODE ?= 1
 logs-client:
 	docker service logs -f $(STACK)_cottonclient
@@ -246,6 +297,9 @@ ct-client-start:
 
 ct-client-stop:
 	docker service scale $(CT_STACK)_cottonclient=0
+
+ct-client-10runs:
+	$(call run_client_n,$(CT_STACK))
 
 ct-logs-client:
 	docker service logs -f $(CT_STACK)_cottonclient
@@ -347,6 +401,9 @@ cn-client-start:
 cn-client-stop:
 	docker service scale $(CN_STACK)_cottonclient=0
 
+cn-client-10runs:
+	$(call run_client_n,$(CN_STACK))
+
 cn-logs-client:
 	docker service logs -f $(CN_STACK)_cottonclient
 
@@ -358,8 +415,8 @@ cn-logs-coord:
         von-config von-patch von-local-build von-local-start von-local-stop \
         von-start von-stop von-status \
         build push client-push deploy teardown client-start client-stop \
-        logs-client logs-coord status experiment \
+        client-10runs logs-client logs-coord status experiment \
         ct-config ct-deploy ct-stop ct-status ct-genesis \
-        ct-client-start ct-client-stop ct-logs-client ct-logs-web \
+        ct-client-start ct-client-stop ct-client-10runs ct-logs-client ct-logs-web \
         cn-config cn-deploy cn-deploy-seq cn-stop cn-status cn-genesis \
-        cn-client-start cn-client-stop cn-logs-client cn-logs-coord
+        cn-client-start cn-client-stop cn-client-10runs cn-logs-client cn-logs-coord
