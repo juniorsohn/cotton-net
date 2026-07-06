@@ -328,6 +328,7 @@ ct-client-10runs-fresh:
 	  echo "   [2/4] ct-config + ct-deploy (NODES=$(NODES))"; \
 	  $(MAKE) --no-print-directory ct-config NODES=$(NODES) >/dev/null || { echo "   ct-config falhou"; exit 1; }; \
 	  $(MAKE) --no-print-directory ct-deploy || { echo "   ct-deploy falhou"; exit 1; }; \
+	  docker service update --restart-condition none --detach $$svc >/dev/null 2>&1 || true; \
 	  echo "   [3/4] aguardando genesis em http://$(BAIA5_IP):9000 (até $(READY_TIMEOUT)s)"; \
 	  t=0; until curl -sf http://$(BAIA5_IP):9000/genesis >/dev/null 2>&1; do \
 	    sleep 5; t=$$((t+5)); [ $$t -ge $(READY_TIMEOUT) ] && { echo "   timeout esperando genesis"; exit 1; }; \
@@ -343,7 +344,7 @@ ct-client-10runs-fresh:
 	    st=$$(docker service ps $$svc --no-trunc --format '{{.CurrentState}}' 2>/dev/null | head -1); \
 	    case "$$st" in \
 	      Complete*) echo "      run $$i OK ($$st)"; break ;; \
-	      Failed*|Rejected*) echo "      run $$i FALHOU: $$st"; exit 1 ;; \
+	      Failed*|Rejected*) echo "      run $$i FALHOU: $$st"; docker service scale --detach $$svc=0 >/dev/null 2>&1 || true; exit 1 ;; \
 	      *) sleep $(POLL) ;; \
 	    esac; \
 	  done; \
