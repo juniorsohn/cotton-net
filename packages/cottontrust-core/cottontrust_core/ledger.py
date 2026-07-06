@@ -31,7 +31,13 @@ from indy_vdr import Pool
 # NYM já comitado pode ainda não estar visível no nó que atende a próxima
 # transação dependente (ATTRIB do próprio DID, ou NYM assinado pelo endorser).
 # A verkey aparece assim que a escrita propaga — basta reenviar com backoff.
-_TRANSIENT_MARKERS = ("cannot be found", "could not authenticate")
+# Erros que justificam retry:
+#  - "cannot be found"/"could not authenticate": janela read-after-write (a verkey
+#    ainda não propagou).
+#  - "timeout": Pool timeout sob carga — em redes grandes (ex. 256 nós) a escrita
+#    ordena, mas devagar; a requisição estoura o timeout do indy-vdr. Retentar
+#    (com a latência somada) permite coletar a run em vez de derrubá-la.
+_TRANSIENT_MARKERS = ("cannot be found", "could not authenticate", "timeout")
 
 
 async def _submit_resilient(pool, build, *, label, attempts=6, base_delay=0.5, stats=None):
@@ -40,26 +46,30 @@ async def _submit_resilient(pool, build, *, label, attempts=6, base_delay=0.5, s
 
     `build` é uma corrotina sem argumentos que constrói E assina a request
     (reconstruída a cada tentativa para não reutilizar o objeto FFI já consumido).
-    Faz retry com backoff exponencial apenas em erros de propagação transitórios;
-    qualquer outra falha é propagada imediatamente. Devolve (response, tx_size).
+    Faz retry com backoff exponencial em erros transitórios (propagação
+    read-after-write e Pool timeout sob carga); qualquer outra falha é propagada
+    imediatamente. Devolve (response, tx_size).
 
-    Se `stats` (dict) for fornecido, preenche `elapsed` (segundos do round-trip
-    BEM-SUCEDIDO ao pool, sem contar os sleeps de retry) e `retries` (nº de
-    tentativas que falharam antes do sucesso). Canal lateral para métrica
-    por-transação sem alterar o retorno (não quebra os chamadores do coordinator).
+    Se `stats` (dict) for fornecido, preenche `elapsed` — o wall-clock TOTAL do
+    1º attempt até o sucesso, INCLUINDO os attempts que falharam (timeout/
+    propagação) e os backoffs. Ou seja: a latência REAL de commitar a escrita
+    mesmo que precise de N retries (em redes grandes, o custo do timeout+retry
+    faz parte da latência observada e deve entrar no gráfico). Também preenche
+    `retries` (nº de tentativas que falharam antes do sucesso).
 
     Importante: `request.body` é lido ANTES do submit — o indy-vdr libera o
     handle da request ao submeter, então acessá-lo depois daria "no request handle".
     """
     last_exc = None
+    t_start = time.monotonic()   # início da 1ª tentativa → base da latência somada
     for i in range(attempts):
         request = await build()
         tx_size = len(request.body.encode("utf-8"))
         try:
-            t0 = time.monotonic()
             response = await pool.submit_request(request)
             if stats is not None:
-                stats["elapsed"] = round(time.monotonic() - t0, 6)
+                # latência real: wall-clock do 1º attempt até este sucesso
+                stats["elapsed"] = round(time.monotonic() - t_start, 6)
                 stats["retries"] = i
             return response, tx_size
         except Exception as e:
@@ -68,7 +78,7 @@ async def _submit_resilient(pool, build, *, label, attempts=6, base_delay=0.5, s
             if transient and i < attempts - 1:
                 delay = base_delay * (2 ** i)
                 logger.warning(
-                    f"Propagação pendente — {label} | tentativa {i + 1}/{attempts}, "
+                    f"Transitório ({label}) — tentativa {i + 1}/{attempts}, "
                     f"retry em {delay:.1f}s | {e}"
                 )
                 await asyncio.sleep(delay)
