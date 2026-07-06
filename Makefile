@@ -69,6 +69,7 @@ help:
 	@echo "  registry-start          Sobe registry em $(BAIA1_IP):5000"
 	@echo "  von-config  NODES=N     Gera start_nodes.sh no NFS (roda uma vez)"
 	@echo "  von-patch               Patcha von-network-base: limite 100 → 10000 nós"
+	@echo "  von-patch-scale         Patch p/ pools grandes: cap réplicas + VC timeout"
 	@echo "  von-local-build         Build + patch da imagem (sem iniciar rede)"
 	@echo "  von-local-start         Rebuild + patch + start na baia atual"
 	@echo "  von-local-stop          Para o supernodo local"
@@ -131,6 +132,15 @@ von-patch:
 	@# Aplica patch no limite de nós do indy-plenum (100 → 10000) na imagem local.
 	@# Requer que von-network-base já exista (make von-local-build ou ./manage build).
 	@chmod +x scripts/patch_von_image.sh && ./scripts/patch_von_image.sh
+
+von-patch-scale:
+	@# Patch de ESCALA p/ pools grandes (192/256+): cap de réplicas (min(f+1,K))
+	@# + view-change timeout maior. Rodar em CADA baia que roda nós, após o
+	@# von-local-build. ⚠️ Muda o consenso de TODOS os tamanhos — re-colete os
+	@# cenários com a mesma imagem (declarar o cap no paper).
+	@# Uso: make von-patch-scale [REPLICA_CAP=4] [VC_TIMEOUT=600]
+	@chmod +x scripts/patch_von_scale.sh
+	@REPLICA_CAP=$(or $(REPLICA_CAP),4) VC_TIMEOUT=$(or $(VC_TIMEOUT),600) ./scripts/patch_von_scale.sh
 
 von-local-build:
 	@# Reconstrói von-network-base na baia atual e aplica o patch indy-plenum.
@@ -472,7 +482,7 @@ cn-logs-coord:
 
 
 .PHONY: help swarm-init registry-start \
-        von-config von-patch von-local-build von-local-start von-local-stop \
+        von-config von-patch von-patch-scale von-local-build von-local-start von-local-stop \
         von-start von-stop von-status \
         build push client-push deploy teardown client-start client-stop \
         client-10runs logs-client logs-coord status experiment \
