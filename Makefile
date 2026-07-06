@@ -98,6 +98,7 @@ help:
 	@echo "  ct-client-10runs RUNS=N N runs seq. (mesmo ledger — só p/ debug)"
 	@echo "  ct-client-10runs-fresh  N runs com ledger FRESCO/run (RUNS NODES SETTLE)"
 	@echo "  ct-logs-client          Logs do cottonclient"
+	@echo "  ct-logs-node NODE=N     Logs do nó Indy N (stack CT)"
 	@echo "  ct-logs-web             Logs do webserver"
 	@echo ""
 	@echo "  ── COTTON-NET Distribuído (Indy fragmentado, RAFT entre super-nós) ──"
@@ -357,6 +358,12 @@ ct-client-10runs-fresh:
 ct-logs-client:
 	docker service logs -f $(CT_STACK)_cottonclient
 
+# Logs de um nó Indy do stack CT (equivalente ao './manage logs' do fluxo CN,
+# que não enxerga estes containers — no CT os nós sobem via Swarm, não compose).
+# Uso: make ct-logs-node NODE=42
+ct-logs-node:
+	docker service logs -f $(CT_STACK)_node$(NODE)
+
 ct-logs-web:
 	docker service logs -f $(CT_STACK)_webserver
 
@@ -471,6 +478,7 @@ cn-logs-coord:
         client-10runs logs-client logs-coord status experiment \
         ct-config ct-deploy ct-stop ct-status ct-genesis \
         ct-client-start ct-client-stop ct-client-10runs ct-client-10runs-fresh \
+        ct-logs-node \
         ct-logs-client ct-logs-web \
         cn-config cn-deploy cn-deploy-seq cn-stop cn-status cn-genesis \
         cn-client-start cn-client-stop cn-client-10runs cn-logs-client cn-logs-coord
