@@ -19,6 +19,7 @@ Referência de migração:
     indy.ledger.sign_and_submit_request()    → sign_and_submit_nym()
 """
 import asyncio
+import os
 import time
 import urllib.request
 from loguru import logger
@@ -103,6 +104,20 @@ async def open_pool(genesis_source: str) -> Pool:
     Raises:
         Exception: Se não conseguir conectar ao pool.
     """
+    # Timeouts do indy-vdr (globais, via set_config): em redes RBFT grandes
+    # (256+ nós) o consenso de ESCRITA é lento e o default (ack ~20s / reply ~60s)
+    # faz submit_request estourar ANTES do commit — nenhum retry ajuda, pois toda
+    # tentativa morre no mesmo timeout. Aumentar o reply_timeout deixa UMA
+    # tentativa esperar o consenso, garantindo a escrita mesmo com latência
+    # absurda. Tunável por env (sem rebuild, se plumbado no stack).
+    ack   = int(os.environ.get("INDY_ACK_TIMEOUT", "120"))
+    reply = int(os.environ.get("INDY_REPLY_TIMEOUT", "600"))
+    try:
+        indy_vdr.set_config({"ack_timeout": ack, "reply_timeout": reply})
+        logger.info(f"indy-vdr timeouts | ack={ack}s reply={reply}s")
+    except Exception as e:
+        logger.warning(f"set_config falhou ({e}); usando timeouts default do indy-vdr")
+
     logger.info(f"Conectando ao pool | source={genesis_source}")
 
     if genesis_source.startswith("http"):
