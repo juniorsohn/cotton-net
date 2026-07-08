@@ -112,6 +112,7 @@ help:
 	@echo "  cn-client-start         Inicia cottonclient COTTON-NET (0 → 1)"
 	@echo "  cn-client-stop          Para cottonclient COTTON-NET  (1 → 0)"
 	@echo "  cn-client-10runs RUNS=N N runs seq. (CSV runN + analyze_metrics report)"
+	@echo "  cn-client-10runs-fresh  N runs com ledgers FRESCOS/run (RUNS NODES SUPERNODOS SETTLE)"
 	@echo "  cn-logs-client          Logs do cottonclient"
 	@echo "  cn-logs-coord NODE=N    Logs do coordinator-N"
 	@echo ""
@@ -439,7 +440,7 @@ cn-stop:
 	done; echo
 	@echo "Varrendo containers cn_ órfãos em cada baia (libera portas host, ex.: 9000)..."
 	@for ip in $(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP) $(BAIA5_IP); do \
-		ssh $(SSH_USER)@$$ip \
+		$(SSH) $(SSH_USER)@$$ip \
 			"docker ps -aq --filter name=$(CN_STACK)_ | xargs -r docker rm -f 2>/dev/null || true"; \
 	done
 	@echo "Removendo configs (por filtro de nome, independente de NODES)..."
@@ -447,7 +448,7 @@ cn-stop:
 	-docker config ls -q --filter name=cn-start-node-sn 2>/dev/null | xargs -r docker config rm 2>/dev/null || true
 	@echo "Removendo volumes das baias..."
 	@for ip in $(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP) $(BAIA5_IP); do \
-		ssh $(SSH_USER)@$$ip \
+		$(SSH) $(SSH_USER)@$$ip \
 			"docker volume ls -q | grep '^$(CN_STACK)_' | xargs -r docker volume rm 2>/dev/null || true"; \
 	done
 	@echo "✅ Stack, configs e volumes removidos."
@@ -474,6 +475,63 @@ cn-client-stop:
 cn-client-10runs:
 	$(call run_client_n,$(CN_STACK))
 
+# ── CN: N runs com LEDGERS FRESCOS por run (reset + redeploy a cada run) ───────
+# Mesma motivação do ct-client-10runs-fresh (DIDs determinísticos + ledger
+# append-only), mas com as diferenças do CN:
+#   - cn-stop também varre containers órfãos via SSH (senha pedida UMA vez);
+#   - o deploy é o cn-deploy-seq, que já aguarda o genesis de CADA super-nó;
+#   - o "pronto p/ escrever" não é o genesis: é o RAFT eleger líder — polling
+#     em http://baia_s:800s/status até algum coordinator responder
+#     raft_leader=true (coordinator-s roda na baia s, porta host 8000+s).
+# Params: RUNS, NODES, SUPERNODOS, SETTLE (espera pós-líder), READY_TIMEOUT.
+# Uso: make cn-client-10runs-fresh RUNS=10 NODES=256 SUPERNODOS=4 [SETTLE=60]
+cn-client-10runs-fresh:
+	@command -v sshpass >/dev/null 2>&1 || { echo "ERRO: 'sshpass' não instalado (cn-stop apaga volumes via SSH com senha). Instale: sudo apt-get install -y sshpass"; exit 1; }
+	@read -rs -p "Senha SSH ($(SSH_USER)@baias): " SSHPASS; echo; export SSHPASS; \
+	svc=$(CN_STACK)_cottonclient; \
+	BAIA_IPS_ARR=($(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP)); \
+	echo "══ CN fresh-ledger — $(RUNS) run(s), NODES=$(NODES) SN=$(SUPERNODOS) (rede recriada por run) ══"; \
+	for i in $$(seq 1 $(RUNS)); do \
+	  echo "──────── run $$i/$(RUNS) ────────"; \
+	  echo "   [1/5] cn-stop (remove stack + volumes via SSH)"; \
+	  $(MAKE) --no-print-directory cn-stop SSH='sshpass -e ssh -o StrictHostKeyChecking=accept-new' || { echo "   cn-stop falhou (senha?)"; exit 1; }; \
+	  echo "   [2/5] cn-config (NODES=$(NODES), SUPERNODOS=$(SUPERNODOS))"; \
+	  $(MAKE) --no-print-directory cn-config NODES=$(NODES) SUPERNODOS=$(SUPERNODOS) >/dev/null || { echo "   cn-config falhou"; exit 1; }; \
+	  echo "   [3/5] cn-deploy-seq (genesis por SN)"; \
+	  $(MAKE) --no-print-directory cn-deploy-seq NODES=$(NODES) SUPERNODOS=$(SUPERNODOS) || { echo "   cn-deploy-seq falhou"; exit 1; }; \
+	  docker service update --restart-condition none --detach $$svc >/dev/null 2>&1 || true; \
+	  echo "   [4/5] aguardando líder RAFT (até $(READY_TIMEOUT)s)"; \
+	  t=0; lider=""; \
+	  until [ -n "$$lider" ]; do \
+	    for s in $$(seq 1 $(SUPERNODOS)); do \
+	      ip=$${BAIA_IPS_ARR[$$((s-1))]}; \
+	      curl -sf --max-time 5 "http://$$ip:$$((8000+s))/status" 2>/dev/null \
+	        | grep -Eq '"raft_leader": ?true' && { lider="coordinator-$$s"; break; }; \
+	    done; \
+	    [ -n "$$lider" ] && break; \
+	    sleep 5; t=$$((t+5)); [ $$t -ge $(READY_TIMEOUT) ] && { echo "   timeout esperando líder RAFT"; exit 1; }; \
+	  done; \
+	  echo "   líder RAFT: $$lider; estabilizando $(SETTLE)s..."; sleep $(SETTLE); \
+	  echo "   [5/5] client run $$i"; \
+	  prev=$$(docker service ps $$svc -q --no-trunc 2>/dev/null | head -1); \
+	  docker service scale --detach $$svc=1 >/dev/null; \
+	  until cur=$$(docker service ps $$svc -q --no-trunc 2>/dev/null | head -1); \
+	        [ -n "$$cur" ] && [ "$$cur" != "$$prev" ]; do sleep 2; done; \
+	  echo "      task $${cur:0:12} rodando; aguardando concluir..."; \
+	  while :; do \
+	    st=$$(docker service ps $$svc --no-trunc --format '{{.CurrentState}}' 2>/dev/null | head -1); \
+	    case "$$st" in \
+	      Complete*) echo "      run $$i OK ($$st)"; break ;; \
+	      Failed*|Rejected*) echo "      run $$i FALHOU: $$st"; docker service scale --detach $$svc=0 >/dev/null 2>&1 || true; exit 1 ;; \
+	      *) sleep $(POLL) ;; \
+	    esac; \
+	  done; \
+	  docker service scale --detach $$svc=0 >/dev/null 2>&1 || true; \
+	  csv=$$(ls -t $(RESULTS_DIR)/*.csv 2>/dev/null | head -1); \
+	  if [ -n "$$csv" ]; then python3 scripts/analyze_metrics.py "$$csv" --md "$${csv%.csv}.report.md" >/dev/null 2>&1 || echo "      [aviso] analyze_metrics falhou"; fi; \
+	done; \
+	echo "══ concluído: $(RUNS) run(s) CN fresh-ledger. CSVs+reports em $(RESULTS_DIR) ══"
+
 cn-logs-client:
 	docker service logs -f $(CN_STACK)_cottonclient
 
@@ -488,6 +546,7 @@ cn-logs-coord:
         client-10runs logs-client logs-coord status experiment \
         ct-config ct-deploy ct-stop ct-status ct-genesis \
         ct-client-start ct-client-stop ct-client-10runs ct-client-10runs-fresh \
+        cn-client-10runs-fresh \
         ct-logs-node \
         ct-logs-client ct-logs-web \
         cn-config cn-deploy cn-deploy-seq cn-stop cn-status cn-genesis \
