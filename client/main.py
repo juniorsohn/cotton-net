@@ -236,6 +236,12 @@ async def run() -> None:
                     r["queue_wait_sec"] = t["queue_wait_sec"]
                     r["indy_time_sec"]  = t["indy_time_sec"]
                     r["tx_size_bytes"]  = t["tx_size_bytes"]
+                    # decomposição por escrita (FSM com WORKLOAD_PARITY=1);
+                    # coordinator antigo não envia → nym==indy (1 NYM/entidade)
+                    r["nym_time_sec"]    = t.get("nym_time_sec", t["indy_time_sec"])
+                    r["role_time_sec"]   = t.get("role_time_sec", 0.0)
+                    r["attrib_time_sec"] = t.get("attrib_time_sec", 0.0)
+                    r["writes"]          = t.get("writes", 1)
                     r["tx_time_sec"]    = round(
                         r["setup_time_sec"] + r["coordinator_time_sec"]
                         + t["queue_wait_sec"] + t["indy_time_sec"], 6

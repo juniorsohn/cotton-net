@@ -64,7 +64,11 @@ class MetricsCollector:
     HEADERS = [
         "pool", "operation", "mode", "entity_num", "entity_type", "entity_id",
         "tx_time_sec", "setup_time_sec", "coordinator_time_sec",
-        "queue_wait_sec", "indy_time_sec", "tx_size_bytes", "retries", "timestamp",
+        "queue_wait_sec", "indy_time_sec",
+        # decomposição por escrita do FSM (CN com WORKLOAD_PARITY=1;
+        # zeros no CT e no CN legado — lá nym_time == indy_time)
+        "nym_time_sec", "role_time_sec", "attrib_time_sec", "writes",
+        "tx_size_bytes", "retries", "timestamp",
     ]
 
     def __init__(self, pool_name: str, output_path: str) -> None:
@@ -87,6 +91,10 @@ class MetricsCollector:
         entity_type: str = "",
         queue_wait_sec: float = 0.0,
         indy_time_sec: float = 0.0,
+        nym_time_sec: float = 0.0,
+        role_time_sec: float = 0.0,
+        attrib_time_sec: float = 0.0,
+        writes: int = 0,
         retries: int = 0,
     ) -> None:
         """
@@ -119,6 +127,10 @@ class MetricsCollector:
             "coordinator_time_sec": round(coordinator_time_sec, 6),
             "queue_wait_sec":       round(queue_wait_sec, 6),
             "indy_time_sec":        round(indy_time_sec, 6),
+            "nym_time_sec":         round(nym_time_sec, 6),
+            "role_time_sec":        round(role_time_sec, 6),
+            "attrib_time_sec":      round(attrib_time_sec, 6),
+            "writes":               writes,
             "tx_size_bytes":        tx_size_bytes,
             "retries":              retries,
             "timestamp":            datetime.now().isoformat(),

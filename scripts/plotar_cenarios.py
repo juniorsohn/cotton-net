@@ -64,27 +64,37 @@ METRICS = {
 }
 # 'consensus' = comparação maçã-com-maçã CT×CN: uma escrita NYM através do pool.
 #   CT: tx_time_sec (round-trip síncrono da escrita no pool flat de n nós)
-#   CN: indy_time_sec (escrita no pool do SN com K_n nós, medida no coordinator)
+#   CN: nym_time_sec (o NYM no pool do SN com K_n nós, medido no coordinator);
+#       fallback indy_time_sec p/ CSVs antigos — sem WORKLOAD_PARITY os dois
+#       são iguais (a entidade fazia 1 NYM só).
 # Nenhuma inclui a fila serial do FSM — essa aparece na decomposição
 # (gen_lat_decomp.py), não aqui.
-CONSENSUS_COL = {'ct': 'tx_time_sec', 'cn': 'indy_time_sec'}
+CONSENSUS_COL = {'ct': ['tx_time_sec'], 'cn': ['nym_time_sec', 'indy_time_sec']}
 MAX_POR_CENARIO = 40_000   # subamostra p/ KDE leve
 
 
-def ler_latencias_ms(path, col):
-    """Coluna `col` (ms) das ops de ledger de um CSV. Exclui setup_local e valores <= 0."""
+def ler_latencias_ms(path, cols):
+    """
+    Primeira coluna de `cols` com valor > 0, por linha (ms), das ops de ledger.
+    Fallback por linha cobre CSVs antigos sem as colunas novas (nym_time_sec).
+    Exclui setup_local e linhas sem valor positivo em nenhuma candidata.
+    """
+    if isinstance(cols, str):
+        cols = [cols]
     vals = []
     try:
         with open(path, newline='', encoding='utf-8') as f:
             for row in csv.DictReader(f):
                 if row.get('operation') == 'setup_local':
                     continue
-                try:
-                    v = float(row.get(col, '') or 0)
-                except ValueError:
-                    continue
-                if v > 0:
-                    vals.append(v * 1000.0)
+                for col in cols:
+                    try:
+                        v = float(row.get(col, '') or 0)
+                    except ValueError:
+                        v = 0.0
+                    if v > 0:
+                        vals.append(v * 1000.0)
+                        break
     except FileNotFoundError:
         pass
     return vals
@@ -95,12 +105,12 @@ def coletar(dir_, systems, nodes, sn, metric):
     dados = {}
     for sk in systems:
         _, _, pat = SYSTEMS[sk]
-        col = CONSENSUS_COL[sk] if metric == 'consensus' else metric
+        cols = CONSENSUS_COL[sk] if metric == 'consensus' else metric
         for N in nodes:
             arquivos = sorted(glob.glob(os.path.join(dir_, pat(N, sn))))
             pool = []
             for a in arquivos:
-                pool.extend(ler_latencias_ms(a, col))
+                pool.extend(ler_latencias_ms(a, cols))
             if pool:
                 dados[(sk, N)] = {'vals': np.asarray(pool, float), 'runs': len(arquivos)}
                 print(f'  {sk} n{N}: {len(arquivos)} run(s), {len(pool)} tx')

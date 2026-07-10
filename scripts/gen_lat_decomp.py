@@ -115,6 +115,9 @@ def cenario_cn(dir_, N, S):
         'coord': [f(r, 'coordinator_time_sec') for r in ok],
         'queue': [f(r, 'queue_wait_sec') for r in ok],
         'write': [f(r, 'indy_time_sec') for r in ok],
+        # só o NYM (comparável 1:1 com o CT no --metric consensus);
+        # CSVs antigos não têm a coluna → fallback indy (lá era 1 NYM mesmo)
+        'nym':   [f(r, 'nym_time_sec') or f(r, 'indy_time_sec') for r in ok],
         'nota': f'{perdidos} entidade(s) sem timing do FSM (descartadas)'
                 if perdidos else 'timing do FSM completo',
     }
@@ -145,7 +148,8 @@ def main():
         c = cenario_cn(args.dir, N, args.sn)
         if c:
             kn = N // int(args.sn)
-            err(f'  CN n{N}: {c["runs"]} run(s), {c["n_writes"]} entidades — {c["nota"]}')
+            err(f'  CN n{N}: {c["runs"]} run(s), {c["n_writes"]} entidades — {c["nota"]}'
+                f' | NYM mediana={fmt(med(c["nym"]))}s (cross-check do --metric consensus)')
             linhas_cn.append(
                 f'CN $n{{=}}{N}$  ($K_n{{=}}{kn}$)  & {cell(c["e2e"])} & '
                 f'{cell(c["coord"])} & {cell(c["queue"])} & {cell(c["write"])} \\\\')
