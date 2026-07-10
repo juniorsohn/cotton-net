@@ -55,12 +55,19 @@ SYSTEMS = {
 # coluna do CSV -> rótulo no eixo. tx_time_sec é end-to-end (ver ⚠️ no topo);
 # indy_time_sec é a escrita efetiva no ledger (a métrica confiável no CN).
 METRICS = {
+    'consensus':            'Per-write consensus latency',
     'tx_time_sec':          'End-to-end transaction latency',
     'indy_time_sec':        'Ledger write latency (Indy)',
     'coordinator_time_sec': 'Coordinator round-trip',
     'queue_wait_sec':       'FSM queue wait',
     'setup_time_sec':       'Local setup latency',
 }
+# 'consensus' = comparação maçã-com-maçã CT×CN: uma escrita NYM através do pool.
+#   CT: tx_time_sec (round-trip síncrono da escrita no pool flat de n nós)
+#   CN: indy_time_sec (escrita no pool do SN com K_n nós, medida no coordinator)
+# Nenhuma inclui a fila serial do FSM — essa aparece na decomposição
+# (gen_lat_decomp.py), não aqui.
+CONSENSUS_COL = {'ct': 'tx_time_sec', 'cn': 'indy_time_sec'}
 MAX_POR_CENARIO = 40_000   # subamostra p/ KDE leve
 
 
@@ -88,11 +95,12 @@ def coletar(dir_, systems, nodes, sn, metric):
     dados = {}
     for sk in systems:
         _, _, pat = SYSTEMS[sk]
+        col = CONSENSUS_COL[sk] if metric == 'consensus' else metric
         for N in nodes:
             arquivos = sorted(glob.glob(os.path.join(dir_, pat(N, sn))))
             pool = []
             for a in arquivos:
-                pool.extend(ler_latencias_ms(a, metric))
+                pool.extend(ler_latencias_ms(a, col))
             if pool:
                 dados[(sk, N)] = {'vals': np.asarray(pool, float), 'runs': len(arquivos)}
                 print(f'  {sk} n{N}: {len(arquivos)} run(s), {len(pool)} tx')
@@ -165,7 +173,7 @@ def plotar(dados, systems, nodes, out_dir, metric):
     ax.set_xticks(range(len(nodes_ok)))
     ax.set_xticklabels([f'{N} nodes' for N in nodes_ok], fontsize=11)
     ax.set_xlabel('Ledger network size', fontsize=12)
-    ax.set_title(f'{METRICS[metric]} by scenario — CT vs CN (10 runs pooled per scenario)',
+    ax.set_title(f'{METRICS[metric]} by scenario — CT vs CN (runs pooled per scenario)',
                  fontsize=13, fontweight='bold')
     ax.yaxis.grid(True, which='major', linestyle='--', alpha=0.45)
     ax.set_axisbelow(True)
@@ -213,7 +221,11 @@ def main():
     if args.metric == 'tx_time_sec':
         print('[INFO] tx_time_sec = latência end-to-end. No CN inclui a espera na fila do '
               'FSM, que aplica as NYMs em SÉRIE (replicação íntegra a todos os supernodos) — '
-              'comportamento esperado. Para isolar o custo de escrita use --metric indy_time_sec.')
+              'comportamento esperado. Para comparação CT×CN use --metric consensus.')
+    if args.metric == 'consensus':
+        print('[INFO] consensus = uma escrita NYM através do pool: CT usa tx_time_sec '
+              '(pool flat, n nós), CN usa indy_time_sec (pool do SN, K_n nós). '
+              'A fila serial do FSM fica de fora — ver gen_lat_decomp.py p/ decomposição.')
 
     print(f'Coletando de {args.dir} (nodes={nodes}, sn={args.sn}, '
           f'systems={systems}, metric={args.metric})')
