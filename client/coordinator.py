@@ -24,6 +24,8 @@ async def register_entity(
     entity_type: str,
     did: str,
     verkey: str,
+    role: str | None = None,
+    raw_attrs: dict | None = None,
     timeout: float = 30.0,
 ) -> None:
     """
@@ -39,6 +41,10 @@ async def register_entity(
         entity_type:     Tipo da entidade ('uba', 'bale', etc.).
         did:             DID gerado localmente pela entidade.
         verkey:          Chave pública correspondente ao DID.
+        role:            Role de ledger (ex.: 'ENDORSER') a conceder; o FSM só
+                         a grava com WORKLOAD_PARITY=1 (paridade CT×CN).
+        raw_attrs:       Atributos públicos p/ ATTRIB (espelho do passo 4 do
+                         CT); idem, só gravados com WORKLOAD_PARITY=1.
         timeout:         Timeout em segundos para aguardar o RAFT (padrão: 30s).
 
     Raises:
@@ -51,6 +57,8 @@ async def register_entity(
         "entity_type": entity_type,
         "did":         did,
         "verkey":      verkey,
+        "role":        role or "",
+        "raw_attrs":   raw_attrs,
     }
 
     logger.debug(

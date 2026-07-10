@@ -27,9 +27,15 @@ from prometheus_client import Counter, Histogram
 
 from log_entry import NymLogEntry
 from pending import PendingQueue
-from cottontrust_core.ledger import submit_nym
+from cottontrust_core.ledger import submit_nym, submit_attrib
 
 _NODE_ID = os.environ["NODE_ID"]
+
+# Paridade de workload CT×CN: com "1", o FSM espelha as escritas do CT por
+# entidade (NYM create → NYM de role p/ endorsers → ATTRIB) em vez do NYM
+# único legado. Default "0" = comportamento legado byte a byte, para que
+# nenhuma campanha rode num estado intermediário por acidente.
+_PARITY = os.environ.get("WORKLOAD_PARITY", "0") == "1"
 
 # Latência da submissão NYM ao ledger Indy local (consenso interno Hyperledger)
 INDY_WRITE_LATENCY = Histogram(
@@ -123,34 +129,88 @@ class CoordinatorFSM:
             await asyncio.sleep(0.05)
 
     async def _submit_nym(self, entry: "NymLogEntry", queue_wait: float = 0.0) -> None:
+        """
+        Aplica as escritas de UMA entidade no ledger Indy local.
+
+        Legado (WORKLOAD_PARITY=0): 1 NYM (DID+verkey), como sempre foi.
+        Paridade (WORKLOAD_PARITY=1): espelha o CT (client/entities/base.py):
+          1. NYM create  — DID+verkey, sem role (como o passo A do CT);
+          2. NYM de role — edição só-de-role (verkey=None! ver comentário no
+             base.py: reenviar a verkey faz o ledger rejeitar a transação);
+          3. ATTRIB      — metadados públicos + link do endorser.
+             ⚠ PLACEHOLDER da Opção B: assinado pelo trustee local. Na Opção A
+             o client enviaria o request pré-assinado pela entidade e este
+             bloco submeteria o blob verbatim (a decisão B×A está pendente).
+
+        Timings por escrita vão para entity_timing (nym/role/attrib_time_sec);
+        indy_time_sec segue sendo o total de escrita da entidade e applied
+        segue contando ENTIDADES (wait_for_drain depende disso).
+        """
         NYM_ATTEMPTED.labels(node_id=_NODE_ID).inc()
+        timing = {"nym_time_sec": 0.0, "role_time_sec": 0.0, "attrib_time_sec": 0.0}
+        tx_bytes = 0
+        writes = 0
         try:
-            t_indy_start = time.monotonic()
-            _, tx_size = await submit_nym(
+            t0 = time.monotonic()
+            _, sz = await submit_nym(
                 pool          = self.pool,
                 store         = self.store,
                 submitter_did = self.trustee_did,
                 target_did    = entry.did,
                 verkey        = entry.verkey,
             )
-            indy_time = time.monotonic() - t_indy_start
-            INDY_WRITE_LATENCY.labels(node_id=_NODE_ID).observe(indy_time)
+            timing["nym_time_sec"] = time.monotonic() - t0
+            INDY_WRITE_LATENCY.labels(node_id=_NODE_ID).observe(timing["nym_time_sec"])
+            tx_bytes += sz
+            writes += 1
+
+            if _PARITY and entry.role:
+                t0 = time.monotonic()
+                _, sz = await submit_nym(
+                    pool          = self.pool,
+                    store         = self.store,
+                    submitter_did = self.trustee_did,
+                    target_did    = entry.did,
+                    verkey        = None,
+                    role          = entry.role,
+                )
+                timing["role_time_sec"] = time.monotonic() - t0
+                INDY_WRITE_LATENCY.labels(node_id=_NODE_ID).observe(timing["role_time_sec"])
+                tx_bytes += sz
+                writes += 1
+
+            if _PARITY and entry.raw_attrs:
+                t0 = time.monotonic()
+                sz = await submit_attrib(
+                    pool          = self.pool,
+                    store         = self.store,
+                    submitter_did = self.trustee_did,
+                    raw_attrs     = entry.raw_attrs,
+                )
+                timing["attrib_time_sec"] = time.monotonic() - t0
+                INDY_WRITE_LATENCY.labels(node_id=_NODE_ID).observe(timing["attrib_time_sec"])
+                tx_bytes += sz
+                writes += 1
+
+            indy_time = sum(timing.values())
             NYM_APPLIED.labels(node_id=_NODE_ID).inc()
-            self.applied += 1
-            self.bytes_written += tx_size
+            self.applied += 1              # por ENTIDADE (contrato do drain)
+            self.bytes_written += tx_bytes
             self._entity_timing[entry.entity_id] = {
                 "queue_wait_sec": round(queue_wait, 6),
                 "indy_time_sec":  round(indy_time, 6),
-                "tx_size_bytes":  tx_size,
+                "tx_size_bytes":  tx_bytes,
+                "writes":         writes,
+                **{k: round(v, 6) for k, v in timing.items()},
             }
             logger.info(
-                f"NYM aplicado | entity_id={entry.entity_id} "
-                f"did={entry.did} size={tx_size}B "
+                f"Entidade aplicada | entity_id={entry.entity_id} "
+                f"did={entry.did} writes={writes} size={tx_bytes}B "
                 f"queue={queue_wait:.3f}s indy={indy_time:.3f}s total={self.applied}"
             )
         except Exception as e:
             NYM_FAILED.labels(node_id=_NODE_ID).inc()
-            logger.error(f"FSM: falha ao submeter NYM | entity_id={entry.entity_id} erro={e}")
+            logger.error(f"FSM: falha ao aplicar entidade | entity_id={entry.entity_id} erro={e}")
             await self.pending.enqueue(entry, error=str(e))
 
     async def snapshot(self) -> bytes:

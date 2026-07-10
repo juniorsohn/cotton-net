@@ -367,6 +367,8 @@ class RegisterRequest(BaseModel):
     entity_type: str
     did:         str
     verkey:      str
+    role:        str = ""
+    raw_attrs:   dict | None = None
 
 
 class RegisterResponse(BaseModel):
@@ -412,6 +414,8 @@ async def register(req: RegisterRequest):
         entity_type = req.entity_type,
         did         = req.did,
         verkey      = req.verkey,
+        role        = req.role,
+        raw_attrs   = req.raw_attrs,
     )
 
     try:

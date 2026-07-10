@@ -24,18 +24,28 @@ from dataclasses import dataclass, asdict
 @dataclass
 class NymLogEntry:
     """
-    Entrada de log representando um registro NYM no ledger Indy.
+    Entrada de log representando o registro de uma ENTIDADE no ledger Indy.
 
     Attributes:
         entity_id:   Identificador único da entidade.
         entity_type: Tipo da entidade ('uba', 'bale', etc.).
         did:         DID a ser registrado no ledger.
         verkey:      Chave pública Ed25519 associada ao DID.
+        role:        Role de ledger a conceder após o NYM (ex.: 'ENDORSER');
+                     "" = sem role. Usado só com WORKLOAD_PARITY=1 no FSM.
+        raw_attrs:   Atributos públicos para o ATTRIB (espelha o passo 4 do
+                     CT em client/entities/base.py); None = sem ATTRIB.
+                     Usado só com WORKLOAD_PARITY=1 no FSM.
+
+    Campos novos têm default → entradas antigas (JSON sem os campos)
+    continuam decodificáveis.
     """
     entity_id:   str
     entity_type: str
     did:         str
     verkey:      str
+    role:        str = ""
+    raw_attrs:   dict | None = None
 
     def encode(self) -> bytes:
         """Serializa a entrada para bytes (JSON). Chamado pelo raftify."""

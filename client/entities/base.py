@@ -136,12 +136,21 @@ class CottonCell:
         tx_size = 0
         if coordinator_url:
             from coordinator import register_entity
+            # Paridade de workload CT×CN: envia também o role de ledger e os
+            # metadados públicos (espelho do passo 4 abaixo). O FSM do
+            # coordinator decide gravá-los conforme WORKLOAD_PARITY.
+            public_fields = getattr(self, "_public_fields", [])
+            public_meta = {k: v for k, v in self.metadata.items() if k in public_fields}
+            if endorser_did:
+                public_meta["endorser_did"] = endorser_did
             await register_entity(
                 coordinator_url=coordinator_url,
                 entity_id=self.entity_id,
                 entity_type=self.entity_type,
                 did=self.did,
                 verkey=self.verkey,
+                role=getattr(self, "_ledger_role", None),
+                raw_attrs={self.entity_type: public_meta} if public_meta else None,
             )
         elif endorser_store and endorser_did:
             # Passo A: endorser (pai) registra o filho como IDENTITY_OWNER.

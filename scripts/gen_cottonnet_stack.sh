@@ -434,6 +434,9 @@ NODE
       TRUSTEE_SEED: "\${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
       WALLET_KEY:   "\${WALLET_KEY:-7h3gFmD4QZdGdzt2NDtTg3XZwXFENBa1ogAgwHBxHNpw}"
       LOG_LEVEL:    "\${LOG_LEVEL:-INFO}"
+      # Paridade de workload CT×CN no FSM (NYM+role+ATTRIB por entidade).
+      # 0 = legado (1 NYM/entidade). Exportar WORKLOAD_PARITY=1 antes do cn-config.
+      WORKLOAD_PARITY: "\${WORKLOAD_PARITY:-0}"
     ports:
       - target: 8000
         published: $(( 8000 + s ))
