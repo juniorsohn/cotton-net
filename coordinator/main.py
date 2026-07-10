@@ -409,13 +409,17 @@ async def register(req: RegisterRequest):
             logger.debug(f"Redirecionando para líder | node={NODE_ID} leader={leader_id}")
             return RedirectResponse(url=leader_url, status_code=307)
 
+    # Com paridade OFF, zera role/raw_attrs ANTES do propose: mantém o payload
+    # RAFT byte-idêntico ao legado (coordinator_time_sec é métrica medida —
+    # nenhum byte extra deve viajar quando o FSM não vai usá-los).
+    parity = os.environ.get("WORKLOAD_PARITY", "0") == "1"
     entry = NymLogEntry(
         entity_id   = req.entity_id,
         entity_type = req.entity_type,
         did         = req.did,
         verkey      = req.verkey,
-        role        = req.role,
-        raw_attrs   = req.raw_attrs,
+        role        = req.role if parity else "",
+        raw_attrs   = req.raw_attrs if parity else None,
     )
 
     try:

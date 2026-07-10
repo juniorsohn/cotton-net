@@ -48,8 +48,19 @@ class NymLogEntry:
     raw_attrs:   dict | None = None
 
     def encode(self) -> bytes:
-        """Serializa a entrada para bytes (JSON). Chamado pelo raftify."""
-        return json.dumps(asdict(self)).encode("utf-8")
+        """
+        Serializa a entrada para bytes (JSON). Chamado pelo raftify.
+
+        Campos vazios (role=""/raw_attrs=None) são OMITIDOS: com paridade
+        desligada a entrada fica byte-idêntica ao formato legado de 4 campos
+        — nenhum byte extra viaja pelo RAFT dentro de coordinator_time_sec.
+        """
+        d = asdict(self)
+        if not d.get("role"):
+            d.pop("role", None)
+        if d.get("raw_attrs") is None:
+            d.pop("raw_attrs", None)
+        return json.dumps(d).encode("utf-8")
 
     @classmethod
     def decode(cls, data: bytes) -> "NymLogEntry":
