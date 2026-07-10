@@ -101,9 +101,31 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"=== Coordinator iniciando | node={NODE_ID} raft={RAFT_ADDR} ===")
 
-    # 1. Conecta ao supernodo Indy local
+    # 1. Conecta ao supernodo Indy local — com RETRY.
+    # No cn-deploy-seq os webservers dos SNs sobem escalonados; o coordinator
+    # do último SN pode nascer minutos antes do seu genesis existir. Se ele
+    # MORRER aqui (era exit não-tratado), o bootstrap RAFT dos demais quebra
+    # em silêncio e o cluster fica sem líder para sempre (visto em n=128).
+    # Esperar em loop mantém o processo vivo e o bootstrap íntegro.
     registry = SupernodeRegistry(NODE_ID, GENESIS_URL)
-    await registry.setup()
+    genesis_timeout = int(os.environ.get("GENESIS_RETRY_TIMEOUT", "900"))
+    t0 = asyncio.get_event_loop().time()
+    while True:
+        try:
+            await registry.setup()
+            break
+        except Exception as e:
+            restante = genesis_timeout - (asyncio.get_event_loop().time() - t0)
+            if restante <= 0:
+                logger.error(
+                    f"Genesis indisponível após {genesis_timeout}s | url={GENESIS_URL}"
+                )
+                raise
+            logger.warning(
+                f"Genesis ainda indisponível ({e.__class__.__name__}: {e}); "
+                f"nova tentativa em 10s | url={GENESIS_URL} restante={int(restante)}s"
+            )
+            await asyncio.sleep(10)
 
     # 2. Inicializa wallet e DID do trustee
     trustee_store, _ = await _init_trustee()

@@ -419,9 +419,11 @@ NODE
       placement:
         constraints: [node.hostname == ${COORD_HOST}]
       restart_policy:
+        # Sem max_attempts: coordinator morto de vez quebra o bootstrap RAFT
+        # dos demais (cluster fica sem líder). Com o retry de genesis no
+        # main.py ele não deve morrer; se morrer, o Swarm insiste.
         condition: on-failure
-        delay: 5s
-        max_attempts: 3
+        delay: 10s
       resources:
         limits: {cpus: '2', memory: 1G}
     environment:
