@@ -62,22 +62,35 @@ METRICS = {
     'queue_wait_sec':       'FSM queue wait',
     'setup_time_sec':       'Local setup latency',
 }
-# 'consensus' = comparação maçã-com-maçã CT×CN: uma escrita NYM através do pool.
-#   CT: tx_time_sec (round-trip síncrono da escrita no pool flat de n nós)
-#   CN: nym_time_sec (o NYM no pool do SN com K_n nós, medido no coordinator);
-#       fallback indy_time_sec p/ CSVs antigos — sem WORKLOAD_PARITY os dois
-#       são iguais (a entidade fazia 1 NYM só).
+# 'consensus' = comparação maçã-com-maçã CT×CN: CADA escrita através do pool
+# vira uma amostra individual, nos dois sistemas.
+#   CT: tx_time_sec por linha (cada linha JÁ é uma escrita no pool flat).
+#   CN: nym/role/attrib_time_sec da linha da entidade — cada coluna > 0 é uma
+#       escrita cronometrada no pool do SN (K_n nós). Fallback indy_time_sec
+#       p/ CSVs antigos (sem WORKLOAD_PARITY a entidade fazia 1 NYM = indy).
 # Nenhuma inclui a fila serial do FSM — essa aparece na decomposição
 # (gen_lat_decomp.py), não aqui.
-CONSENSUS_COL = {'ct': ['tx_time_sec'], 'cn': ['nym_time_sec', 'indy_time_sec']}
+CONSENSUS_CT_COLS = ['tx_time_sec']
+CONSENSUS_CN_COLS = ['nym_time_sec', 'role_time_sec', 'attrib_time_sec']
+CONSENSUS_CN_FALLBACK = 'indy_time_sec'
 MAX_POR_CENARIO = 40_000   # subamostra p/ KDE leve
 
 
-def ler_latencias_ms(path, cols):
+def _f(row, col):
+    try:
+        v = float(row.get(col, '') or 0)
+    except ValueError:
+        return 0.0
+    return v
+
+
+def ler_latencias_ms(path, cols, modo='primeira', fallback=None):
     """
-    Primeira coluna de `cols` com valor > 0, por linha (ms), das ops de ledger.
-    Fallback por linha cobre CSVs antigos sem as colunas novas (nym_time_sec).
-    Exclui setup_local e linhas sem valor positivo em nenhuma candidata.
+    Valores (ms) das ops de ledger de um CSV. Exclui setup_local.
+      modo='primeira': 1 amostra/linha — primeira coluna de `cols` com v > 0.
+      modo='todas':    N amostras/linha — CADA coluna de `cols` com v > 0 vira
+                       uma amostra (escritas individuais); se nenhuma existir,
+                       usa `fallback` (CSVs antigos, onde a entidade = 1 NYM).
     """
     if isinstance(cols, str):
         cols = [cols]
@@ -87,14 +100,23 @@ def ler_latencias_ms(path, cols):
             for row in csv.DictReader(f):
                 if row.get('operation') == 'setup_local':
                     continue
-                for col in cols:
-                    try:
-                        v = float(row.get(col, '') or 0)
-                    except ValueError:
-                        v = 0.0
-                    if v > 0:
-                        vals.append(v * 1000.0)
-                        break
+                if modo == 'todas':
+                    achou = False
+                    for col in cols:
+                        v = _f(row, col)
+                        if v > 0:
+                            vals.append(v * 1000.0)
+                            achou = True
+                    if not achou and fallback:
+                        v = _f(row, fallback)
+                        if v > 0:
+                            vals.append(v * 1000.0)
+                else:
+                    for col in cols:
+                        v = _f(row, col)
+                        if v > 0:
+                            vals.append(v * 1000.0)
+                            break
     except FileNotFoundError:
         pass
     return vals
@@ -105,12 +127,16 @@ def coletar(dir_, systems, nodes, sn, metric):
     dados = {}
     for sk in systems:
         _, _, pat = SYSTEMS[sk]
-        cols = CONSENSUS_COL[sk] if metric == 'consensus' else metric
+        if metric == 'consensus':
+            cols = CONSENSUS_CT_COLS if sk == 'ct' else CONSENSUS_CN_COLS
+            modo, fb = 'todas', (None if sk == 'ct' else CONSENSUS_CN_FALLBACK)
+        else:
+            cols, modo, fb = metric, 'primeira', None
         for N in nodes:
             arquivos = sorted(glob.glob(os.path.join(dir_, pat(N, sn))))
             pool = []
             for a in arquivos:
-                pool.extend(ler_latencias_ms(a, cols))
+                pool.extend(ler_latencias_ms(a, cols, modo=modo, fallback=fb))
             if pool:
                 dados[(sk, N)] = {'vals': np.asarray(pool, float), 'runs': len(arquivos)}
                 print(f'  {sk} n{N}: {len(arquivos)} run(s), {len(pool)} tx')
