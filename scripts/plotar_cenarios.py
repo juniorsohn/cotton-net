@@ -259,8 +259,9 @@ def main():
               'FSM, que aplica as NYMs em SÉRIE (replicação íntegra a todos os supernodos) — '
               'comportamento esperado. Para comparação CT×CN use --metric consensus.')
     if args.metric == 'consensus':
-        print('[INFO] consensus = uma escrita NYM através do pool: CT usa tx_time_sec '
-              '(pool flat, n nós), CN usa indy_time_sec (pool do SN, K_n nós). '
+        print('[INFO] consensus = cada escrita no pool vira uma amostra: CT usa tx_time_sec '
+              'por linha (pool flat, n nós); CN usa nym/role/attrib_time_sec da entidade '
+              '(pool do SN, K_n nós; fallback indy p/ CSVs antigos). '
               'A fila serial do FSM fica de fora — ver gen_lat_decomp.py p/ decomposição.')
 
     print(f'Coletando de {args.dir} (nodes={nodes}, sn={args.sn}, '
