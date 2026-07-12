@@ -113,6 +113,7 @@ help:
 	@echo "  cn-client-stop          Para cottonclient COTTON-NET  (1 → 0)"
 	@echo "  cn-client-10runs RUNS=N N runs seq. (CSV runN + analyze_metrics report)"
 	@echo "  cn-client-10runs-fresh  N runs com ledgers FRESCOS/run (RUNS NODES SUPERNODOS SETTLE)"
+	@echo "  cn-deploy-fast          Deploy paralelo (todos os SNs de uma vez; CN_DEPLOY=cn-deploy-fast no fresh)"
 	@echo "  cn-logs-client          Logs do cottonclient"
 	@echo "  cn-logs-coord NODE=N    Logs do coordinator-N"
 	@echo ""
@@ -328,6 +329,9 @@ ct-client-10runs:
 # Uso: make ct-client-10runs-fresh RUNS=10 NODES=64 [SETTLE=90]
 SETTLE        ?= 60
 READY_TIMEOUT ?= 600
+GENESIS_KICK  ?= 180   # s sem genesis => reinicia o webserver do SN (anchor sem retry)
+GENESIS_ABORT ?= 720   # s sem genesis => aborta o deploy (evita travar a campanha)
+CN_DEPLOY     ?= cn-deploy-seq   # ou cn-deploy-fast (paralelo)
 ct-client-10runs-fresh:
 	@command -v sshpass >/dev/null 2>&1 || { echo "ERRO: 'sshpass' não instalado (ct-stop apaga volumes via SSH com senha). Instale: sudo apt-get install -y sshpass"; exit 1; }
 	@read -rs -p "Senha SSH ($(SSH_USER)@baias): " SSHPASS; echo; export SSHPASS; \
@@ -421,12 +425,49 @@ cn-deploy-seq:
 			$(CN_STACK)_webserver-sn$${s} >/dev/null 2>&1; \
 		WEBIP=$${BAIA_IPS_ARR[$$((s-1))]}; \
 		echo "Aguardando genesis SN$$s em http://$$WEBIP:9000 ..."; \
+		t=0; \
 		until curl -sf "http://$$WEBIP:9000/genesis" >/dev/null 2>&1; do \
-			printf '.'; sleep 15; \
+			printf '.'; sleep 15; t=$$((t+15)); \
+			if [ $$t -ge $(GENESIS_ABORT) ]; then \
+				echo ""; echo "❌ SN$$s sem genesis após $${t}s — abortando"; exit 1; \
+			fi; \
+			if [ $$((t % $(GENESIS_KICK))) -eq 0 ]; then \
+				echo ""; echo "   [auto-resgate] SN$$s sem genesis após $${t}s — reiniciando webserver (anchor do von não faz retry após Pool timeout)"; \
+				docker service update --force --detach $(CN_STACK)_webserver-sn$$s >/dev/null 2>&1 || true; \
+			fi; \
 		done; \
 		echo " ✅ SN$$s OK"; \
 	done; \
 	echo ""; \
+	echo "✅ Todos os $(SUPERNODOS) supernodos com genesis OK"
+
+# Deploy PARALELO: sobe todos os SNs de uma vez e espera os 4 genesis.
+# Viável desde o retry de genesis no coordinator (não morre mais no bootstrap
+# se o webserver do seu SN ainda não existe). Mesmo auto-resgate do seq:
+# o anchor do webserver von NÃO tenta de novo após Pool timeout — se o genesis
+# não vier em GENESIS_KICK s, reinicia o webserver do SN; GENESIS_ABORT aborta.
+# Uso via fresh: make cn-client-10runs-fresh ... CN_DEPLOY=cn-deploy-fast
+cn-deploy-fast:
+	@BAIA_IPS_ARR=($(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP)); \
+	echo "=== Deploy paralelo COTTON-NET: $(SUPERNODOS) SN × $$(( $(NODES) / $(SUPERNODOS) )) nós ==="; \
+	docker stack deploy --resolve-image=never -c docker-stack-cottonnet.yml $(CN_STACK); \
+	echo "Aguardando genesis dos $(SUPERNODOS) supernodos (kick a cada $(GENESIS_KICK)s, abort em $(GENESIS_ABORT)s)..."; \
+	for s in $$(seq 1 $(SUPERNODOS)); do \
+	  WEBIP=$${BAIA_IPS_ARR[$$((s-1))]}; \
+	  printf "SN$$s (http://$$WEBIP:9000) "; \
+	  t=0; \
+	  until curl -sf "http://$$WEBIP:9000/genesis" >/dev/null 2>&1; do \
+	    printf '.'; sleep 15; t=$$((t+15)); \
+	    if [ $$t -ge $(GENESIS_ABORT) ]; then \
+	      echo ""; echo "❌ SN$$s sem genesis após $${t}s — abortando"; exit 1; \
+	    fi; \
+	    if [ $$((t % $(GENESIS_KICK))) -eq 0 ]; then \
+	      echo ""; echo "   [auto-resgate] SN$$s sem genesis após $${t}s — reiniciando webserver"; \
+	      docker service update --force --detach $(CN_STACK)_webserver-sn$$s >/dev/null 2>&1 || true; \
+	    fi; \
+	  done; \
+	  echo " ✅"; \
+	done; \
 	echo "✅ Todos os $(SUPERNODOS) supernodos com genesis OK"
 
 cn-stop:
@@ -497,8 +538,8 @@ cn-client-10runs-fresh:
 	  $(MAKE) --no-print-directory cn-stop SSH='sshpass -e ssh -o StrictHostKeyChecking=accept-new' || { echo "   cn-stop falhou (senha?)"; exit 1; }; \
 	  echo "   [2/5] cn-config (NODES=$(NODES), SUPERNODOS=$(SUPERNODOS))"; \
 	  $(MAKE) --no-print-directory cn-config NODES=$(NODES) SUPERNODOS=$(SUPERNODOS) >/dev/null || { echo "   cn-config falhou"; exit 1; }; \
-	  echo "   [3/5] cn-deploy-seq (genesis por SN)"; \
-	  $(MAKE) --no-print-directory cn-deploy-seq NODES=$(NODES) SUPERNODOS=$(SUPERNODOS) || { echo "   cn-deploy-seq falhou"; exit 1; }; \
+	  echo "   [3/5] $(CN_DEPLOY) (genesis por SN)"; \
+	  $(MAKE) --no-print-directory $(CN_DEPLOY) NODES=$(NODES) SUPERNODOS=$(SUPERNODOS) || { echo "   $(CN_DEPLOY) falhou"; exit 1; }; \
 	  docker service update --restart-condition none --detach $$svc >/dev/null 2>&1 || true; \
 	  echo "   [4/5] aguardando líder RAFT (até $(READY_TIMEOUT)s)"; \
 	  t=0; lider=""; \
@@ -546,7 +587,7 @@ cn-logs-coord:
         client-10runs logs-client logs-coord status experiment \
         ct-config ct-deploy ct-stop ct-status ct-genesis \
         ct-client-start ct-client-stop ct-client-10runs ct-client-10runs-fresh \
-        cn-client-10runs-fresh \
+        cn-client-10runs-fresh cn-deploy-fast \
         ct-logs-node \
         ct-logs-client ct-logs-web \
         cn-config cn-deploy cn-deploy-seq cn-stop cn-status cn-genesis \
