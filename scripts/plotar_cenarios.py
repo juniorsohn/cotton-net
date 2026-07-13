@@ -154,10 +154,13 @@ def plotar(dados, systems, nodes, out_dir, metric):
     rng = np.random.default_rng(42)
     fig, ax = plt.subplots(figsize=(max(8, 2.4 * len(nodes_ok)), 6.8))
     n_sys = len(systems)
-    largura = 0.7 / n_sys
+    largura = 0.9 / n_sys
 
     # medianas por sistema para as curvas de tendência (em log10 ms)
     trend = {sk: [] for sk in systems}
+    # extremos plotados (log10) p/ travar o ylim no intervalo dos dados —
+    # sem isso os violinos ficam espremidos numa fração do eixo
+    ylo, yhi = [], []
 
     for si, sk in enumerate(systems):
         rotulo, cor, _ = SYSTEMS[sk]
@@ -171,6 +174,10 @@ def plotar(dados, systems, nodes, out_dir, metric):
             if len(v) > MAX_POR_CENARIO:
                 v = rng.choice(v, MAX_POR_CENARIO, replace=False)
             logv = np.log10(v)
+            # percentis (não min/max): <1% de outliers baixos não podem
+            # esticar o eixo e achatar todos os violinos
+            ylo.append(np.percentile(logv, 0.5))
+            yhi.append(np.percentile(logv, 99.5))
             pos = xi + off
             parts = ax.violinplot([logv], positions=[pos], widths=largura * 0.95,
                                   showmedians=False, showextrema=False)
@@ -184,13 +191,13 @@ def plotar(dados, systems, nodes, out_dir, metric):
             ax.vlines(pos, q1, q3, color='#263238', linewidth=5, alpha=0.85)
             ax.scatter([pos], [med], color='white', s=10, zorder=4)
             trend[sk].append(med)
-            # rótulo da mediana (ms) ao lado
+            # rótulo da mediana (ms) ao lado, fora do corpo do violino
             ha = 'right' if si == 0 else 'left'
-            dx = -0.02 if si == 0 else 0.02
+            dx = -largura * 0.55 if si == 0 else largura * 0.55
             ax.text(pos + dx, med, f'{10**med:.0f}', ha=ha, va='center',
-                    fontsize=8, color=cor, fontweight='bold',
-                    bbox=dict(boxstyle='round,pad=0.12', fc='white', ec=cor,
-                              lw=0.7, alpha=0.9))
+                    fontsize=12, color=cor, fontweight='bold',
+                    bbox=dict(boxstyle='round,pad=0.15', fc='white', ec=cor,
+                              lw=0.8, alpha=0.9))
 
     # curvas de tendência (medianas ligadas entre nós)
     for sk in systems:
@@ -201,31 +208,31 @@ def plotar(dados, systems, nodes, out_dir, metric):
         if len(xs) >= 2:
             ax.plot(xs, ys, color=cor, linewidth=1.6, alpha=0.55, linestyle='--', zorder=3)
 
-    # eixo Y em ms sobre escala log
+    # eixo Y em ms sobre escala log, travado no intervalo dos dados
+    if ylo:
+        ax.set_ylim(min(ylo) - 0.06, max(yhi) + 0.06)
     ax.yaxis.set_major_locator(mticker.FixedLocator(
-        [np.log10(t) for t in (10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000)]))
+        [np.log10(t) for t in (10, 20, 50, 100, 200, 500, 1000,
+                               2000, 3000, 5000, 10000, 20000)]))
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda y, _: f'{10**y:.0f}'))
-    ax.set_ylabel(f'{METRICS[metric]} (ms) — log scale', fontsize=12)
+    # figura entra no paper a 1.0\textwidth: fontes ~16-17pt => ~10pt efetivos
+    ax.set_ylabel(f'{METRICS[metric]} (ms) — log scale', fontsize=17)
     ax.set_xticks(range(len(nodes_ok)))
-    ax.set_xticklabels([f'{N} nodes' for N in nodes_ok], fontsize=11)
-    ax.set_xlabel('Ledger network size', fontsize=12)
-    ax.set_title(f'{METRICS[metric]} by scenario — CT vs CN (runs pooled per scenario)',
-                 fontsize=13, fontweight='bold')
+    ax.set_xticklabels([f'{N} nodes' for N in nodes_ok], fontsize=15)
+    # folga lateral: os rótulos de mediana das pontas (crescem p/ FORA do
+    # violino) não podem invadir a régua do Y nem vazar pela direita
+    ax.set_xlim(-1.0, len(nodes_ok) - 1 + 1.0)
+    ax.tick_params(axis='y', labelsize=15)
+    ax.set_xlabel('Ledger network size', fontsize=17)
+    ax.set_title(f'{METRICS[metric]} by scenario — CT vs CN',
+                 fontsize=18, fontweight='bold')
     ax.yaxis.grid(True, which='major', linestyle='--', alpha=0.45)
     ax.set_axisbelow(True)
 
     handles = [plt.Rectangle((0, 0), 1, 1, color=SYSTEMS[sk][1], alpha=0.8,
                              label=SYSTEMS[sk][0]) for sk in systems]
     ax.legend(handles=handles, loc='upper left', framealpha=0.95,
-              edgecolor='lightgray', fontsize=10)
-
-    # nota de cobertura (nº de runs por cenário) no rodapé
-    cobertura = '  '.join(
-        f'{sk}n{N}={dados[(sk, N)]["runs"]}r' for sk in systems for N in nodes_ok
-        if (sk, N) in dados)
-    fig.text(0.99, 0.01,
-             f'box = IQR + median  ·  dashed = median scaling trend  ·  runs pooled: {cobertura}',
-             ha='right', va='bottom', fontsize=6.5, color='gray')
+              edgecolor='lightgray', fontsize=14)
 
     os.makedirs(out_dir, exist_ok=True)
     fig.tight_layout()
