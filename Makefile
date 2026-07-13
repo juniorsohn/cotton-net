@@ -487,10 +487,10 @@ cn-stop:
 	@echo "Removendo configs (por filtro de nome, independente de NODES)..."
 	-docker config ls -q --filter name=cn-gen-tx-sn    2>/dev/null | xargs -r docker config rm 2>/dev/null || true
 	-docker config ls -q --filter name=cn-start-node-sn 2>/dev/null | xargs -r docker config rm 2>/dev/null || true
-	@echo "Removendo volumes das baias..."
+	@echo "Removendo volumes das baias (preservando prometheus-data/grafana-data)..."
 	@for ip in $(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP) $(BAIA5_IP); do \
 		$(SSH) $(SSH_USER)@$$ip \
-			"docker volume ls -q | grep '^$(CN_STACK)_' | xargs -r docker volume rm 2>/dev/null || true"; \
+			"docker volume ls -q | grep '^$(CN_STACK)_' | grep -vE 'prometheus-data|grafana-data' | xargs -r docker volume rm 2>/dev/null || true"; \
 	done
 	@echo "✅ Stack, configs e volumes removidos."
 
