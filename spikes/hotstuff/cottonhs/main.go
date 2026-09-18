@@ -33,6 +33,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -77,6 +78,7 @@ type clusterConfig struct {
 	Consensus      string         `json:"consensus"`
 	Crypto         string         `json:"crypto"`
 	LeaderRotation string         `json:"leader_rotation"`
+	TLSServerName  string         `json:"tls_server_name,omitempty"`
 	ViewTimeoutMs  float64        `json:"view_timeout_ms"`
 	BatchSize      uint32         `json:"batch_size"`
 	Replicas       []replicaEntry `json:"replicas"`
@@ -96,6 +98,21 @@ func runKeygen(args []string) error {
 	consensusName := fs.String("consensus", "chainedhotstuff", "chainedhotstuff | fasthotstuff | simplehotstuff")
 	host := fs.String("host", "127.0.0.1", "host de todas as réplicas (spike local)")
 	basePort := fs.Int("base-port", 21000, "réplica=base+100+id, cliente=base+200+id, http=base+300+id, applier=base+400+id")
+	// Modo container: cada réplica tem host próprio (nome de serviço Swarm) e
+	// portas FIXAS, porque cada uma roda sozinha no seu container — não há
+	// colisão para o offset por id resolver. O certificado TLS de cada réplica
+	// passa a cobrir o nome pelo qual as outras vão discá-la.
+	hosts := fs.String("hosts", "", "hosts por réplica, separados por vírgula (ex: coordinator-1,coordinator-2,...); ativa o modo container")
+	replicaPort := fs.Int("replica-port", 60071, "porta réplica↔réplica no modo -hosts")
+	clientPort := fs.Int("client-port", 60072, "porta cliente→réplicas no modo -hosts")
+	httpAddr := fs.String("http-addr", "", "endereço HTTP local do daemon, igual em todas (ex: 127.0.0.1:8080)")
+	applierURL := fs.String("applier-url", "", "URL do applier, igual em todas (ex: http://127.0.0.1:8000/apply)")
+	// O gorums resolve o endereço para IP antes de discar, então o TLS exigiria
+	// o IP no certificado — impossível de saber antes do deploy em Swarm. Com um
+	// nome comum no SAN de todos, a verificação deixa de depender do endereço.
+	// A identidade de réplica não mora aqui: vem das chaves BLS, conferidas em
+	// cada mensagem do consenso.
+	tlsName := fs.String("tls-name", "", "nome comum no SAN de todos os certificados (padrão: cottonhs no modo -hosts)")
 	_ = fs.Parse(args)
 
 	if err := os.MkdirAll(*dir, 0o755); err != nil {
@@ -116,9 +133,34 @@ func runKeygen(args []string) error {
 		ViewTimeoutMs:  500,
 		BatchSize:      1,
 	}
+	hostList := []string{}
+	if *hosts != "" && *tlsName == "" {
+		*tlsName = "cottonhs"
+	}
+	cfg.TLSServerName = *tlsName
+
+	if *hosts != "" {
+		for _, h := range strings.Split(*hosts, ",") {
+			hostList = append(hostList, strings.TrimSpace(h))
+		}
+		if len(hostList) != *n {
+			return fmt.Errorf("-hosts tem %d entradas para n=%d réplicas", len(hostList), *n)
+		}
+	}
+
 	for i := 1; i <= *n; i++ {
 		id := hotstuff.ID(i)
-		kc, err := keygen.GenerateKeyChain(id, []string{*host, "localhost"}, *cryptoName, ca, caKey)
+		selfHost := *host
+		if len(hostList) > 0 {
+			selfHost = hostList[i-1]
+		}
+		// SANs: o nome pelo qual as outras réplicas discam + loopback, que o
+		// daemon usa para falar com o applier e responder o /status local.
+		sans := []string{selfHost, "localhost", "127.0.0.1"}
+		if *tlsName != "" {
+			sans = append(sans, *tlsName)
+		}
+		kc, err := keygen.GenerateKeyChain(id, sans, *cryptoName, ca, caKey)
 		if err != nil {
 			return err
 		}
@@ -128,13 +170,24 @@ func runKeygen(args []string) error {
 			}
 		}
 		addr := func(offset int) string { return net.JoinHostPort(*host, strconv.Itoa(*basePort+offset+i)) }
-		cfg.Replicas = append(cfg.Replicas, replicaEntry{
+		entry := replicaEntry{
 			ID:          uint32(i),
 			ReplicaAddr: addr(100),
 			ClientAddr:  addr(200),
 			HTTPAddr:    addr(300),
 			ApplierURL:  "http://" + addr(400) + "/apply",
-		})
+		}
+		if len(hostList) > 0 {
+			entry.ReplicaAddr = net.JoinHostPort(selfHost, strconv.Itoa(*replicaPort))
+			entry.ClientAddr = net.JoinHostPort(selfHost, strconv.Itoa(*clientPort))
+		}
+		if *httpAddr != "" {
+			entry.HTTPAddr = *httpAddr
+		}
+		if *applierURL != "" {
+			entry.ApplierURL = *applierURL
+		}
+		cfg.Replicas = append(cfg.Replicas, entry)
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -166,6 +219,10 @@ type daemon struct {
 	clientID uint32
 
 	pending atomic.Int64  // comandos reais aguardando quórum de execução
+	// Comandos já comitados mas ainda não aceitos pelo applier (entrega em curso
+	// ou em retry). É o backpressure que interessa para durabilidade: o consenso
+	// pode estar ordenando bem mais rápido do que o Indy consegue escrever.
+	forwarding atomic.Int64
 	fillers atomic.Uint64 // no-ops enviados
 
 	execMu  sync.Mutex
@@ -200,6 +257,7 @@ func (d *daemon) forwardLoop() {
 		if d.self.ApplierURL == "" {
 			continue
 		}
+		d.forwarding.Add(1)
 		for attempt := 1; ; attempt++ {
 			req, _ := http.NewRequest(http.MethodPost, d.self.ApplierURL, bytes.NewReader(it.data))
 			req.Header.Set("X-Client-ID", strconv.FormatUint(uint64(it.clientID), 10))
@@ -209,10 +267,12 @@ func (d *daemon) forwardLoop() {
 				_, _ = io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
 				if resp.StatusCode < 300 {
+					d.forwarding.Add(-1)
 					break
 				}
 				if resp.StatusCode < 500 {
 					log.Printf("applier rejeitou idx=%d: status %d (descartado)", it.idx, resp.StatusCode)
+					d.forwarding.Add(-1)
 					break
 				}
 				err = fmt.Errorf("status %d", resp.StatusCode)
@@ -294,6 +354,7 @@ func (d *daemon) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		"applied":      applied,
 		"hash":         sum,
 		"pending":      d.pending.Load(),
+		"applier_pending": int64(len(d.applyCh)) + d.forwarding.Load(),
 		"fillers_sent": d.fillers.Load(),
 	})
 }
@@ -330,6 +391,7 @@ func runReplica(args []string) error {
 	logLevel := fs.String("log-level", "info", "debug | info | warn | error")
 	fillerInterval := fs.Duration("filler-interval", 0, "intervalo dos no-ops com comando pendente (0 = desliga; obsoleto desde -empty-blocks)")
 	emptyBlocks := fs.Bool("empty-blocks", true, "líder propõe bloco vazio enquanto houver comando não comitado na cadeia")
+	listenHost := fs.String("listen", "", "host de bind (ex: 0.0.0.0 em container); vazio = escuta no mesmo endereço do cluster.json")
 	proposeTimeout := fs.Duration("propose-timeout", 10*time.Second, "timeout de /propose")
 	_ = fs.Parse(args)
 
@@ -434,14 +496,30 @@ func runReplica(args []string) error {
 		RootCAs:        rootCAs,
 		BatchSize:      cfg.BatchSize,
 		ManagerOptions: []gorums.ManagerOption{gorums.WithDialTimeout(5 * time.Second)},
+		TLSServerName:  cfg.TLSServerName,
 		OnExec:         d.onExec,
 	}, builder)
 
-	repLis, err := net.Listen("tcp", self.ReplicaAddr)
+	// Onde ESCUTAR ≠ por onde me DISCAM. Em container, o endereço que as outras
+	// réplicas usam é o nome do serviço Swarm, que resolve para a VIP — e não se
+	// faz bind em VIP (mesma armadilha que o raftify encontrou, vide o antigo
+	// _get_container_ip do coordinator). O cluster.json guarda o endereço
+	// discável; -listen diz onde abrir o socket.
+	bind := func(addr string) string {
+		if *listenHost == "" {
+			return addr
+		}
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return addr
+		}
+		return net.JoinHostPort(*listenHost, port)
+	}
+	repLis, err := net.Listen("tcp", bind(self.ReplicaAddr))
 	if err != nil {
 		return err
 	}
-	cliLis, err := net.Listen("tcp", self.ClientAddr)
+	cliLis, err := net.Listen("tcp", bind(self.ClientAddr))
 	if err != nil {
 		return err
 	}
@@ -461,7 +539,7 @@ func runReplica(args []string) error {
 
 	mgr := clientpb.NewManager(
 		gorums.WithDialTimeout(5*time.Second),
-		gorums.WithGrpcDialOptions(grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(rootCAs, ""))),
+		gorums.WithGrpcDialOptions(grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(rootCAs, cfg.TLSServerName))),
 	)
 	d.cli, err = mgr.NewConfiguration(&quorumSpec{faulty: hotstuff.NumFaulty(len(cfg.Replicas))}, gorums.WithNodeMap(clientNodes))
 	if err != nil {
@@ -484,6 +562,8 @@ func runReplica(args []string) error {
 	}()
 	log.Printf("cottonhs réplica %d pronta | consenso=%s crypto=%s n=%d f=%d http=%s filler=%v empty-blocks=%v",
 		id, cfg.Consensus, cfg.Crypto, len(cfg.Replicas), hotstuff.NumFaulty(len(cfg.Replicas)), self.HTTPAddr, *fillerInterval, *emptyBlocks)
+	log.Printf("cottonhs réplica %d rede | discável=%s bind=%s cliente=%s applier=%s",
+		id, self.ReplicaAddr, bind(self.ReplicaAddr), bind(self.ClientAddr), self.ApplierURL)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

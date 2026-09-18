@@ -101,6 +101,36 @@ index 1d4b598..95f6057 100644
  // SetShouldUseAggQC sets the ShouldUseAggQC setting to true.
  func (opts *Options) SetShouldUseAggQC() {
  	opts.shouldUseAggQC = true
+diff --git a/replica/clientsrv.go b/replica/clientsrv.go
+index cb45427..ba59e7e 100644
+--- a/replica/clientsrv.go
++++ b/replica/clientsrv.go
+@@ -30,6 +30,7 @@ type clientSrv struct {
+ 	cmdCache     *cmdCache
+ 	hash         hash.Hash
+ 	cmdCount     uint32
++	onExec       func(clientID uint32, sequenceNumber uint64, data []byte)
+ }
+ 
+ // newClientServer returns a new client server.
+@@ -39,6 +40,7 @@ func newClientServer(conf Config, srvOpts []gorums.ServerOption) (srv *clientSrv
+ 		srv:          gorums.NewServer(srvOpts...),
+ 		cmdCache:     newCmdCache(int(conf.BatchSize)),
+ 		hash:         sha256.New(),
++		onExec:       conf.OnExec,
+ 	}
+ 	clientpb.RegisterClientServer(srv.srv, srv)
+ 	return srv
+@@ -102,6 +104,9 @@ func (srv *clientSrv) Exec(cmd hotstuff.Command) {
+ 	for _, cmd := range batch.GetCommands() {
+ 		_, _ = srv.hash.Write(cmd.Data)
+ 		srv.cmdCount++
++		if srv.onExec != nil {
++			srv.onExec(cmd.GetClientID(), cmd.GetSequenceNumber(), cmd.GetData())
++		}
+ 		srv.mut.Lock()
+ 		id := cmdID{cmd.GetClientID(), cmd.GetSequenceNumber()}
+ 		if done, ok := srv.awaitingCmds[id]; ok {
 diff --git a/replica/cmdcache.go b/replica/cmdcache.go
 index f13ad6b..a3e7c58 100644
 --- a/replica/cmdcache.go
@@ -136,3 +166,32 @@ index f13ad6b..a3e7c58 100644
  	// Get the batch. Note that we may not be able to fill the batch, but that should be fine as long as we can send
  	// at least one command.
  	for i := 0; i < c.batchSize; i++ {
+diff --git a/replica/replica.go b/replica/replica.go
+index d5c1146..2ee5df0 100644
+--- a/replica/replica.go
++++ b/replica/replica.go
+@@ -46,6 +46,16 @@ type Config struct {
+ 	ManagerOptions []gorums.ManagerOption
+ 	// Location names of all replicas.
+ 	Locations []string
++	// TLSServerName, if set, is the name verified in the peers' certificates
++	// instead of the dialed address. Gorums resolves addresses to IPs before
++	// dialing (see gorums.NewRawNodeWithID), so in a container deployment the
++	// address presented to TLS is a runtime IP that no certificate can carry.
++	// Peer identity does not rest on TLS here: every consensus message is
++	// signed and verified against the replica's public key. (COTTON-NET)
++	TLSServerName string
++	// OnExec, if set, is called for every committed command, in execution order.
++	// It runs on the event loop and must not block. (COTTON-NET execution hook)
++	OnExec func(clientID uint32, sequenceNumber uint64, data []byte)
+ }
+ 
+ // Replica is a participant in the consensus protocol.
+@@ -101,6 +111,7 @@ func New(conf Config, builder modules.Builder) (replica *Replica) {
+ 		creds = credentials.NewTLS(&tls.Config{
+ 			RootCAs:      conf.RootCAs,
+ 			Certificates: []tls.Certificate{*conf.Certificate},
++			ServerName:   conf.TLSServerName, // COTTON-NET: empty keeps stock behavior
+ 		})
+ 	}
+ 	srv.cfg = backend.NewConfig(creds, managerOpts...)

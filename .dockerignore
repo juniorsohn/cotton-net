@@ -1,0 +1,31 @@
+# Contexto de build é a raiz do projeto (docker build -f coordinator/dockerfile .).
+# Fora dele: tudo que não entra em imagem nenhuma.
+
+# Spike HotStuff — só patches/ e cottonhs/ são copiados pelo dockerfile
+spikes/hotstuff/relab/
+spikes/hotstuff/bin/
+spikes/hotstuff/runs/
+spikes/hotstuff/demo/
+spikes/hotstuff/patches/README.md
+
+# Runtime e dados
+**/wallets/
+**/raft-data/
+**/output/
+**/.run/
+*.log
+
+# Ambiente e ferramentas locais
+.venv/
+venv/
+.git/
+__pycache__/
+**/__pycache__/
+*.pyc
+.vscode/
+.idea/
+
+# Monitoramento e documentação não entram na imagem do coordinator
+monitoring/
+docs/
+paper/

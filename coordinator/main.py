@@ -276,6 +276,7 @@ class StatusResponse(BaseModel):
     consensus:         str
     consensus_ready:   bool
     consensus_applied: int
+    consensus_backlog: int          # comitado mas ainda não entregue ao FSM
     supernodo:      str
     alive:          bool
     pending:        int
@@ -365,6 +366,7 @@ async def status():
         consensus         = "hotstuff",
         consensus_ready   = bool(hs),
         consensus_applied = int(hs.get("applied", 0)),
+        consensus_backlog = int(hs.get("applier_pending", 0)),
         supernodo   = registry.local.genesis_url,
         alive       = registry.local.alive,
         pending     = pending.size,

@@ -3,7 +3,12 @@
 #
 # O relab é um clone do upstream e NÃO é versionado aqui (tem .git próprio).
 # O que é nosso e vive no git: patches/, cottonhs/, demo/, applier_stub.py,
-# spike_test.py. Este script junta as peças.
+# spike_test.py, test_coordinator_boundary.py. Este script junta as peças.
+#
+# É DETERMINÍSTICO: devolve o clone ao estado do upstream e reaplica o patch.
+# Ou seja, editar relab/ direto não sobrevive a um setup — o patch é a fonte da
+# verdade. Para mudar o relab: edite, rode `git -C relab diff > patches/0001-*.patch`
+# e só então rode o setup de novo.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION="${VERSION:-v0.5.0}"
@@ -14,13 +19,10 @@ if [[ ! -d "$HERE/relab/.git" ]]; then
 fi
 
 cd "$HERE/relab"
+git checkout -- .                       # volta ao upstream
 for p in "$HERE"/patches/*.patch; do
-  if git apply --reverse --check "$p" 2>/dev/null; then
-    echo "   $(basename "$p") já aplicado"
-  else
-    echo "→ aplicando $(basename "$p")"
-    git apply "$p"
-  fi
+  echo "→ aplicando $(basename "$p")"
+  git apply "$p"
 done
 
 echo "→ copiando cottonhs/ para o módulo relab (precisa de internal/proto/clientpb)"

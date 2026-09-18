@@ -1,25 +1,38 @@
+# Imagem do coordinator: um par de processos por réplica do consenso externo —
+# a API Python (FastAPI) e o daemon Go (cottonhs/HotStuff), que conversam por
+# 127.0.0.1 dentro do container. Ver entrypoint.sh e hotstuff.py.
+#
+# Contexto de build é a raiz do projeto: docker build -f coordinator/dockerfile .
+
+# ── Stage 1: daemon de consenso (Go) ─────────────────────────────────────────
+# O relab/hotstuff é upstream e não é versionado no repositório (tem .git
+# próprio); aqui ele é clonado na versão fixada, recebe nossos patches e o
+# cottonhs, que precisa morar dentro do módulo por causa de internal/proto.
+FROM golang:1.23-bookworm AS hotstuff
+ARG RELAB_VERSION=v0.5.0
+WORKDIR /src
+RUN git clone --depth 1 --branch ${RELAB_VERSION} \
+        https://github.com/relab/hotstuff.git relab
+COPY spikes/hotstuff/patches/ /patches/
+COPY spikes/hotstuff/cottonhs/ /src/relab/cmd/cottonhs/
+WORKDIR /src/relab
+RUN for p in /patches/*.patch; do echo "aplicando $(basename $p)"; git apply "$p"; done
+RUN GOTOOLCHAIN=auto CGO_ENABLED=0 go build -ldflags='-s -w' \
+        -o /out/cottonhs ./cmd/cottonhs
+
+# ── Stage 2: coordinator (Python) ────────────────────────────────────────────
 FROM python:3.10-slim
 
-# raftify tem dependências nativas (Rust compilado via PyO3)
-# grpc_tools é necessário para gerar os stubs protobuf em build time
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libssl-dev \
-    libffi-dev \
-    pkg-config \
-    curl \
+# protobuf-compiler/grpc_tools geram os stubs em build time.
+# (O toolchain Rust saiu junto com o raftify: indy-vdr e aries-askar têm wheels
+# pré-compiladas, então nada mais aqui precisa compilar código nativo.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
-
-# Rust é necessário para compilar raftify (PyO3/maturin, sem wheel pré-compilada)
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-    sh -s -- -y --profile minimal --no-modify-path
-ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /app
 
 # Instala o pacote compartilhado (cottontrust_core.*)
-# O contexto de build é a raiz do projeto (make build usa -f coordinator/dockerfile .)
 COPY packages/cottontrust-core /tmp/cottontrust-core
 RUN pip install --no-cache-dir /tmp/cottontrust-core
 
@@ -38,14 +51,18 @@ RUN mkdir -p /app/generated && \
         --grpc_python_out=/app/generated \
         /app/proto/coordinator.proto
 
+# Daemon de consenso vindo do stage 1
+COPY --from=hotstuff /out/cottonhs /usr/local/bin/cottonhs
+
 # Copia o código da aplicação
 COPY coordinator/ .
+RUN chmod +x /app/entrypoint.sh
 
-RUN mkdir -p /app/wallets /app/output /app/raft-data
+RUN mkdir -p /app/wallets /app/output
 
 # Porta da API HTTP
 EXPOSE 8000
-# Porta RAFT (transporte interno do raftify entre coordinators)
-EXPOSE 60061
+# Portas do consenso HotStuff (réplica↔réplica e cliente→réplicas)
+EXPOSE 60071 60072
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["/app/entrypoint.sh"]
