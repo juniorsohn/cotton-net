@@ -88,6 +88,9 @@ registry:       SupernodeRegistry | None  = None
 pending:        PendingQueue | None       = None
 fsm:            CoordinatorFSM | None     = None
 consensus:      HotStuffClient | None     = None
+# Último /status do daemon, atualizado em background. O collector do Prometheus
+# é síncrono e não pode fazer HTTP no meio do scrape, então lê daqui.
+_consensus_status: dict = {}
 _background_tasks: list[asyncio.Task]    = []
 
 
@@ -145,6 +148,15 @@ async def lifespan(app: FastAPI):
     # esperamos ele responder, o que já significa cluster HotStuff formado.
     consensus = HotStuffClient(HOTSTUFF_URL)
     await consensus.wait_ready(timeout=HOTSTUFF_READY_TIMEOUT)
+
+    # 5b. Espelha o estado do daemon para o Prometheus (ver _CottonNetCollector)
+    async def _poll_consensus():
+        global _consensus_status
+        while True:
+            _consensus_status = await consensus.status()
+            await asyncio.sleep(5)
+
+    _background_tasks.append(asyncio.create_task(_poll_consensus(), name="poll_consensus"))
 
     # 6. Drena fila de entradas confirmadas pelo consenso
     _background_tasks.append(asyncio.create_task(fsm.drain_queue(), name="drain_queue"))
@@ -204,6 +216,27 @@ class _CottonNetCollector:
     """
 
     def collect(self):
+        if _consensus_status:
+            g = GaugeMetricFamily(
+                "cotton_consensus_applied",
+                "Comandos executados pelo consenso externo nesta réplica",
+                labels=["node_id", "engine"],
+            )
+            g.add_metric([NODE_ID, "hotstuff"], float(_consensus_status.get("applied", 0)))
+            yield g
+
+            # Comitado pelo consenso mas ainda não aceito pelo FSM. É o
+            # backpressure que separa ORDENADO de DURÁVEL: o consenso ordena em
+            # dezenas de ms, a escrita no Indy leva segundos.
+            g = GaugeMetricFamily(
+                "cotton_consensus_backlog",
+                "Comandos comitados aguardando entrega ao FSM (ordenado, não durável)",
+                labels=["node_id", "engine"],
+            )
+            g.add_metric([NODE_ID, "hotstuff"],
+                         float(_consensus_status.get("applier_pending", 0)))
+            yield g
+
         if pending is not None:
             g = GaugeMetricFamily(
                 "cotton_pending_queue_size",

@@ -1,7 +1,7 @@
 # COTTONTRUST / COTTON-NET — Makefile
 SHELL := /bin/bash
 #
-# ── Workflow COTTON-NET (RAFT + supernodos) ───────────────────────────────────
+# ── Workflow COTTON-NET (consenso HotStuff + supernodos) ─────────────────────
 #   1. make swarm-init            (uma vez só)
 #   2. make von-start NODES=32    (varia entre experimentos)
 #   3. make deploy                (sobe infraestrutura — coordinators, monitoring)
@@ -102,13 +102,14 @@ help:
 	@echo "  ct-logs-node NODE=N     Logs do nó Indy N (stack CT)"
 	@echo "  ct-logs-web             Logs do webserver"
 	@echo ""
-	@echo "  ── COTTON-NET Distribuído (Indy fragmentado, RAFT entre super-nós) ──"
+	@echo "  ── COTTON-NET Distribuído (Indy fragmentado, HotStuff entre super-nós) ──"
 	@echo "  cn-config   NODES=N SUPERNODOS=S  Gera stack YAML + docker configs"
 	@echo "  cn-deploy               Deploy do stack (todos os SN simultâneos)"
 	@echo "  cn-deploy-seq           Deploy sequencial: um SN por vez (recomendado)"
 	@echo "  cn-stop                 Remove stack + configs + volumes"
 	@echo "  cn-status               Status do stack COTTON-NET distribuído"
 	@echo "  cn-genesis              Verifica genesis de cada baia (S_n×:9000)"
+	@echo "  cn-consensus            Saúde do consenso HotStuff (pronto/ordenado/backlog)"
 	@echo "  cn-client-start         Inicia cottonclient COTTON-NET (0 → 1)"
 	@echo "  cn-client-stop          Para cottonclient COTTON-NET  (1 → 0)"
 	@echo "  cn-client-10runs RUNS=N N runs seq. (CSV runN + analyze_metrics report)"
@@ -183,7 +184,7 @@ push: build
 	docker push $(REGISTRY)/indy-exporter:latest
 
 # Rebuild + push só da imagem do client (CT não usa o coordinator).
-# Útil para iterar no client sem recompilar o raftify do coordinator.
+# Útil para iterar no client sem recompilar o daemon de consenso do coordinator.
 client-push:
 	docker build -t $(REGISTRY)/cottontrust-client:latest -f client/dockerfile .
 	docker push  $(REGISTRY)/cottontrust-client:latest
@@ -499,6 +500,25 @@ cn-status:
 	docker stack ps $(CN_STACK) --no-trunc
 	@echo ""
 	docker stack services $(CN_STACK)
+
+cn-consensus:
+	@# Saúde do consenso externo em cada coordinator: pronto?, quanto ordenou,
+	@# quanto ainda não virou escrita no Indy (backlog), e a fila do FSM.
+	@# `docker stack ps` só diz se o container vive — isto diz se ele CONSENTE.
+	@echo "coordinator        pronto  ordenado  backlog  fila_fsm  aplicado_fsm"
+	@BAIA_IPS_ARR=($(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP)); \
+	for s in $$(seq 1 $(SUPERNODOS)); do \
+	  ip=$${BAIA_IPS_ARR[$$((s-1))]}; \
+	  js=$$(curl -sf --max-time 5 "http://$$ip:$$((8000+s))/status" 2>/dev/null); \
+	  if [ -z "$$js" ]; then \
+	    printf "coordinator-%-6s %s\n" "$$s" "SEM RESPOSTA (http://$$ip:$$((8000+s)))"; \
+	  else \
+	    echo "$$js" | python3 -c "import json,sys; d=json.load(sys.stdin); \
+print('coordinator-%-6s %-7s %-9s %-8s %-9s %s' % (d['node_id'].split('-')[-1], d['consensus_ready'], d['consensus_applied'], d['consensus_backlog'], d['fsm_queue'], d['fsm_applied']))"; \
+	  fi; \
+	done
+	@echo ""
+	@echo "backlog alto = consenso ordenando mais rápido que o Indy escreve (ordenado ≠ durável)"
 
 cn-genesis:
 	@echo "Verificando genesis dos super-nós (cada baia:9000)..."
