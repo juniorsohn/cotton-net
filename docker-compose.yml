@@ -1,5 +1,13 @@
 # COTTONTRUST / COTTON-NET — Docker Swarm Stack
 #
+# ⚠️  LEGADO NESTA BRANCH (bft-hotstuff): este arquivo é da era RAFT e NÃO foi
+# migrado para o consenso HotStuff — os coordinators aqui ainda recebem
+# RAFT_ADDR/RAFT_PEERS, que a imagem atual ignora, e não montam as chaves do
+# consenso. Subir por ele deixaria os coordinators sem cluster.
+# O caminho do COTTON-NET é `make cn-config` (gera docker-stack-cottonnet.yml
+# por scripts/gen_cottonnet_stack.sh, com chaves e configs) seguido de
+# `make cn-deploy`.
+#
 # Topologia (4 supernodos + 1 nó de monitoramento):
 #   baia1: coordinator-1 + Supernodo S1 (VON Network)
 #   baia2: coordinator-2 + Supernodo S2 (VON Network)

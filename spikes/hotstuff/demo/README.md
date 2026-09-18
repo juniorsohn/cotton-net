@@ -73,6 +73,7 @@ um bloco com a NYM, três vazios, `DECIDE`, `EXEC` — e aí silêncio.
 |---|---|---|
 | `N` | 4 | nº de réplicas (BFT precisa de 3f+1: 4 tolera 1 falha) |
 | `BASE` | 34000 | base das portas (http da réplica i = BASE+300+i) |
+| `TLS` | false | cifra o consenso com a CA do cluster; desligado por padrão para a comparação com o baseline Raft, que roda em claro |
 | `EMPTY` | true | líder propõe bloco vazio p/ fechar a cadeia; `false` = relab original |
 | `FILLER` | 0s | no-ops (contorno antigo); só faz sentido com `EMPTY=false` |
 | `LOGLEVEL` | info | `debug` mostra o protocolo por dentro em `.run/replica-N.log` |

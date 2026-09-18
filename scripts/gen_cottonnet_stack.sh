@@ -229,6 +229,48 @@ done
 
 echo ""
 
+# ── Chaves e configuração do consenso HotStuff ───────────────────────────────
+# Uma réplica de consenso por coordinator, no mesmo container (ver
+# coordinator/entrypoint.sh). As chaves são geradas UMA vez aqui, na manager, e
+# distribuídas como Docker configs: cada container recebe a SUA chave privada e
+# as PÚBLICAS de todos — é com as públicas que cada réplica verifica as
+# assinaturas das mensagens, e é daí que vem a identidade de réplica.
+#
+# O keygen roda dentro da própria imagem do coordinator: nada de Go na manager.
+# --user evita que os arquivos saiam como root e fiquem ilegíveis para o
+# docker config create logo abaixo.
+
+HS_TAG="s${SUPERNODOS}"
+HS_DIR="$(mktemp -d)"
+HS_HOSTS=""
+for s in $(seq 1 $SUPERNODOS); do HS_HOSTS="${HS_HOSTS}coordinator-${s},"; done
+HS_HOSTS="${HS_HOSTS%,}"
+
+echo "🔑 Gerando chaves do consenso (${SUPERNODOS} réplicas: ${HS_HOSTS})"
+docker run --rm --user "$(id -u):$(id -g)" \
+    --entrypoint cottonhs \
+    -v "${HS_DIR}:/out" \
+    "${REGISTRY:-localhost:5000}/cottontrust-coordinator:latest" \
+    keygen -n "${SUPERNODOS}" -dir /out -hosts "${HS_HOSTS}" \
+           -http-addr 127.0.0.1:8080 -applier-url http://127.0.0.1:8000/apply
+
+hs_config() {   # nome, arquivo — configs do Swarm são imutáveis: remove e recria
+    if docker config inspect "$1" &>/dev/null 2>&1; then docker config rm "$1" >/dev/null; fi
+    docker config create "$1" "$2" >/dev/null
+}
+hs_config "cn-hs-cluster-${HS_TAG}" "${HS_DIR}/cluster.json"
+hs_config "cn-hs-ca-${HS_TAG}"      "${HS_DIR}/ca.crt"
+for s in $(seq 1 $SUPERNODOS); do
+    hs_config "cn-hs-pub${s}-${HS_TAG}"    "${HS_DIR}/r${s}.pub"
+    hs_config "cn-hs-key${s}-${HS_TAG}"    "${HS_DIR}/r${s}.key"
+    hs_config "cn-hs-crt${s}-${HS_TAG}"    "${HS_DIR}/r${s}.crt"
+    hs_config "cn-hs-tlskey${s}-${HS_TAG}" "${HS_DIR}/r${s}.tlskey"
+done
+rm -rf "${HS_DIR}"
+echo "✅ Configs do consenso criados: cn-hs-*-${HS_TAG}"
+
+echo ""
+
 # ── Gera docker-stack-cottonnet.yml ──────────────────────────────────────────
 
 {
@@ -278,6 +320,16 @@ for s in $(seq 1 $SUPERNODOS); do
     echo "  cn-start-node-sn${s}-kn${KN}:"
     echo "    external: true"
 done
+echo "  cn-hs-cluster-${HS_TAG}:"
+echo "    external: true"
+echo "  cn-hs-ca-${HS_TAG}:"
+echo "    external: true"
+for s in $(seq 1 $SUPERNODOS); do
+    for f in pub key crt tlskey; do
+        echo "  cn-hs-${f}${s}-${HS_TAG}:"
+        echo "    external: true"
+    done
+done
 
 # ── Volumes ───────────────────────────────────────────────────────────────────
 echo ""
@@ -287,7 +339,6 @@ echo "  prometheus-data:"
 echo "  grafana-data:"
 for s in $(seq 1 $SUPERNODOS); do
     echo "  coordinator-${s}-wallets:"
-    echo "  coordinator-${s}-raft:"
     echo "  coordinator-${s}-output:"
     echo "  webserver-sn${s}-cli:"
     echo "  webserver-sn${s}-ledger:"
@@ -306,14 +357,6 @@ for s in $(seq 1 $SUPERNODOS); do
     COORD_IP="${IPS[$((s-1))]}"
     CONFIG_GEN="cn-gen-tx-sn${s}-kn${KN}"
     CONFIG_START="cn-start-node-sn${s}-kn${KN}"
-
-    RAFT_PEERS=""
-    for other in $(seq 1 $SUPERNODOS); do
-        if (( other != s )); then
-            RAFT_PEERS="${RAFT_PEERS}${other}=coordinator-${other}:60061,"
-        fi
-    done
-    RAFT_PEERS="${RAFT_PEERS%,}"
 
     echo ""
     echo "  # ════════════════════════════════════════════════════════════════════"
@@ -419,9 +462,10 @@ NODE
       placement:
         constraints: [node.hostname == ${COORD_HOST}]
       restart_policy:
-        # Sem max_attempts: coordinator morto de vez quebra o bootstrap RAFT
-        # dos demais (cluster fica sem líder). Com o retry de genesis no
-        # main.py ele não deve morrer; se morrer, o Swarm insiste.
+        # Sem max_attempts: coordinator morto de vez tira uma réplica do
+        # consenso, e com n=${SUPERNODOS} o quórum não sobra. Com o retry de
+        # genesis no main.py ele não deve morrer; se morrer, o Swarm insiste.
+        # O entrypoint amarra API e daemon: se um cai, o container cai inteiro.
         condition: on-failure
         delay: 10s
       resources:
@@ -429,8 +473,14 @@ NODE
     environment:
       NODE_ID:        "node-${s}"
       NODE_NUM:       "${s}"
-      RAFT_ADDR:      "0.0.0.0:60061"
-      RAFT_PEERS:     "${RAFT_PEERS}"
+      # Consenso: o daemon lê as chaves e o cluster.json dos Docker configs
+      # montados em /run/hotstuff. Escuta em 0.0.0.0 e é discado pelo nome do
+      # serviço (endpoint_mode dnsrr resolve direto no IP do container).
+      HOTSTUFF_DIR:    "/run/hotstuff"
+      HOTSTUFF_LISTEN: "0.0.0.0"
+      # Desligado por padrão: o baseline CFT roda em texto puro e cifrar só um
+      # dos lados sujaria a comparação. A propriedade BFT não depende do TLS.
+      HOTSTUFF_TLS:    "\${HOTSTUFF_TLS:-false}"
       GENESIS_URL:    "http://${COORD_IP}:9000/genesis"
       TRUSTEE_DID:  "\${TRUSTEE_DID:-V4SGRU86Z58d6TV7PBUe6f}"
       TRUSTEE_SEED: "\${TRUSTEE_SEED:-000000000000000000000000Trustee1}"
@@ -444,16 +494,31 @@ NODE
         published: $(( 8000 + s ))
         protocol: tcp
         mode: host
-      - target: 60061
-        published: 6006${s}
-        protocol: tcp
-        mode: host
     networks: [cotton-overlay]
     volumes:
       - coordinator-${s}-wallets:/app/wallets
-      - coordinator-${s}-raft:/app/raft-data
       - coordinator-${s}-output:/app/output
+    configs:
+      - source: cn-hs-cluster-${HS_TAG}
+        target: /run/hotstuff/cluster.json
+      - source: cn-hs-ca-${HS_TAG}
+        target: /run/hotstuff/ca.crt
+      - source: cn-hs-key${s}-${HS_TAG}
+        target: /run/hotstuff/r${s}.key
+        mode: 0400
+      - source: cn-hs-crt${s}-${HS_TAG}
+        target: /run/hotstuff/r${s}.crt
+      - source: cn-hs-tlskey${s}-${HS_TAG}
+        target: /run/hotstuff/r${s}.tlskey
+        mode: 0400
 COORD
+
+    # Públicas de TODAS as réplicas: cada uma verifica com elas as assinaturas
+    # do consenso. Sem a pública de alguém, as mensagens dele são rejeitadas.
+    for other in $(seq 1 $SUPERNODOS); do
+        echo "      - source: cn-hs-pub${other}-${HS_TAG}"
+        echo "        target: /run/hotstuff/r${other}.pub"
+    done
 
 done
 

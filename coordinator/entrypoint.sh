@@ -12,6 +12,7 @@ set -euo pipefail
 : "${NODE_NUM:?NODE_NUM é obrigatório (id desta réplica, 1..n)}"
 HOTSTUFF_DIR="${HOTSTUFF_DIR:-/run/hotstuff}"   # chaves + cluster.json (docker config)
 HOTSTUFF_LISTEN="${HOTSTUFF_LISTEN:-0.0.0.0}"   # bind local; o discável vem do cluster.json
+HOTSTUFF_TLS="${HOTSTUFF_TLS:-false}"           # desligado: o baseline CFT roda em claro
 API_PORT="${API_PORT:-8000}"
 
 if [[ ! -f "${HOTSTUFF_DIR}/cluster.json" ]]; then
@@ -20,8 +21,9 @@ if [[ ! -f "${HOTSTUFF_DIR}/cluster.json" ]]; then
     exit 1
 fi
 
-echo "[entrypoint] cottonhs réplica ${NODE_NUM} | dir=${HOTSTUFF_DIR} listen=${HOTSTUFF_LISTEN}"
-cottonhs replica -id "${NODE_NUM}" -dir "${HOTSTUFF_DIR}" -listen "${HOTSTUFF_LISTEN}" &
+echo "[entrypoint] cottonhs réplica ${NODE_NUM} | dir=${HOTSTUFF_DIR} listen=${HOTSTUFF_LISTEN} tls=${HOTSTUFF_TLS}"
+cottonhs replica -id "${NODE_NUM}" -dir "${HOTSTUFF_DIR}" \
+                 -listen "${HOTSTUFF_LISTEN}" -tls="${HOTSTUFF_TLS}" &
 pid_hs=$!
 
 echo "[entrypoint] uvicorn | porta=${API_PORT}"

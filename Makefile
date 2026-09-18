@@ -487,6 +487,7 @@ cn-stop:
 	@echo "Removendo configs (por filtro de nome, independente de NODES)..."
 	-docker config ls -q --filter name=cn-gen-tx-sn    2>/dev/null | xargs -r docker config rm 2>/dev/null || true
 	-docker config ls -q --filter name=cn-start-node-sn 2>/dev/null | xargs -r docker config rm 2>/dev/null || true
+	-docker config ls -q --filter name=cn-hs-            2>/dev/null | xargs -r docker config rm 2>/dev/null || true
 	@echo "Removendo volumes das baias (preservando prometheus-data/grafana-data)..."
 	@for ip in $(BAIA1_IP) $(BAIA2_IP) $(BAIA3_IP) $(BAIA4_IP) $(BAIA5_IP); do \
 		$(SSH) $(SSH_USER)@$$ip \

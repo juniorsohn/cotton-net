@@ -15,10 +15,10 @@ for i in $(seq 1 "$N"); do
 done
 sleep 1
 
-echo "→ subindo $N réplicas HotStuff (chainedhotstuff, bls12, bloco-vazio=$EMPTY, filler=$FILLER, log=$LOGLEVEL)"
+echo "→ subindo $N réplicas HotStuff (chainedhotstuff, bls12, bloco-vazio=$EMPTY, tls=$TLS, filler=$FILLER, log=$LOGLEVEL)"
 for i in $(seq 1 "$N"); do
   nohup "$BIN" replica -id "$i" -dir "$RUN/cluster" -filler-interval "$FILLER" \
-    -empty-blocks="$EMPTY" -propose-timeout 10s -log-level "$LOGLEVEL" > "$RUN/replica-$i.log" 2>&1 & echo $! >> "$RUN/pids"
+    -empty-blocks="$EMPTY" -tls="$TLS" -propose-timeout 10s -log-level "$LOGLEVEL" > "$RUN/replica-$i.log" 2>&1 & echo $! >> "$RUN/pids"
 done
 
 echo "→ esperando as réplicas responderem /status"

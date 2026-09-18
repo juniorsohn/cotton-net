@@ -34,3 +34,7 @@ spikes/hotstuff/relab/
 spikes/hotstuff/bin/
 spikes/hotstuff/runs/
 spikes/hotstuff/demo/.run/
+
+# Stacks gerados por scripts/gen_*.sh (artefatos de make cn-config / ct-config)
+docker-stack-cottonnet.yml
+docker-stack-cottontrust.yml

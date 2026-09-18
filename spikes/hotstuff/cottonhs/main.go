@@ -54,6 +54,7 @@ import (
 	"github.com/relab/hotstuff/synchronizer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	// módulos registrados por nome
@@ -392,6 +393,12 @@ func runReplica(args []string) error {
 	fillerInterval := fs.Duration("filler-interval", 0, "intervalo dos no-ops com comando pendente (0 = desliga; obsoleto desde -empty-blocks)")
 	emptyBlocks := fs.Bool("empty-blocks", true, "líder propõe bloco vazio enquanto houver comando não comitado na cadeia")
 	listenHost := fs.String("listen", "", "host de bind (ex: 0.0.0.0 em container); vazio = escuta no mesmo endereço do cluster.json")
+	// TLS desligado por padrão: o baseline CFT (raftify) roda em texto puro, e
+	// medir HotStuff cifrado contra Raft em claro embutiria na comparação uma
+	// diferença que não é do protocolo. A propriedade BFT não depende disto —
+	// cada mensagem do consenso é assinada e verificada contra a chave pública
+	// da réplica; o TLS aqui é confidencialidade/integridade de transporte.
+	useTLS := fs.Bool("tls", false, "cifra o tráfego de consenso com a CA do cluster")
 	proposeTimeout := fs.Duration("propose-timeout", 10*time.Second, "timeout de /propose")
 	_ = fs.Parse(args)
 
@@ -491,7 +498,7 @@ func runReplica(args []string) error {
 	d.rep = replica.New(replica.Config{
 		ID:             id,
 		PrivateKey:     privKey,
-		TLS:            true,
+		TLS:            *useTLS,
 		Certificate:    &cert,
 		RootCAs:        rootCAs,
 		BatchSize:      cfg.BatchSize,
@@ -537,9 +544,13 @@ func runReplica(args []string) error {
 	}
 	d.rep.Start()
 
+	clientCreds := insecure.NewCredentials()
+	if *useTLS {
+		clientCreds = credentials.NewClientTLSFromCert(rootCAs, cfg.TLSServerName)
+	}
 	mgr := clientpb.NewManager(
 		gorums.WithDialTimeout(5*time.Second),
-		gorums.WithGrpcDialOptions(grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(rootCAs, cfg.TLSServerName))),
+		gorums.WithGrpcDialOptions(grpc.WithTransportCredentials(clientCreds)),
 	)
 	d.cli, err = mgr.NewConfiguration(&quorumSpec{faulty: hotstuff.NumFaulty(len(cfg.Replicas))}, gorums.WithNodeMap(clientNodes))
 	if err != nil {
@@ -562,6 +573,7 @@ func runReplica(args []string) error {
 	}()
 	log.Printf("cottonhs réplica %d pronta | consenso=%s crypto=%s n=%d f=%d http=%s filler=%v empty-blocks=%v",
 		id, cfg.Consensus, cfg.Crypto, len(cfg.Replicas), hotstuff.NumFaulty(len(cfg.Replicas)), self.HTTPAddr, *fillerInterval, *emptyBlocks)
+	log.Printf("cottonhs réplica %d transporte | tls=%v", id, *useTLS)
 	log.Printf("cottonhs réplica %d rede | discável=%s bind=%s cliente=%s applier=%s",
 		id, self.ReplicaAddr, bind(self.ReplicaAddr), bind(self.ClientAddr), self.ApplierURL)
 
