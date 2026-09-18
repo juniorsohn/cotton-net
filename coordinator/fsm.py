@@ -69,6 +69,15 @@ NYM_FAILED = Counter(
     "NYMs que falharam na submissão ao Indy e foram para a fila de retry",
     ["node_id"],
 )
+# Reaplicações: a entidade já estava no ledger. Acontece quando uma réplica
+# reinicia, recupera a cadeia do consenso e reexecuta o que já tinha escrito.
+# Contador próprio de propósito — some do "failed" sem virar invisível, porque
+# um valor alto aqui significa réplica reiniciando e reprocessando história.
+NYM_IDEMPOTENT = Counter(
+    "cotton_nym_already_registered_total",
+    "NYMs reaplicadas cujo DID já estava no ledger (recuperação após restart)",
+    ["node_id"],
+)
 
 
 class CoordinatorFSM:
@@ -209,6 +218,22 @@ class CoordinatorFSM:
                 f"queue={queue_wait:.3f}s indy={indy_time:.3f}s total={self.applied}"
             )
         except Exception as e:
+            # Reaplicação idempotente: o DID já existe no ledger com esta verkey,
+            # e o Indy recusa porque só o dono pode mexer na verkey. Não é falha
+            # — a entidade ESTÁ registrada; mandar para o retry só gasta dez
+            # tentativas contra um ledger que nunca vai aceitar.
+            #
+            # Mesmo critério do cliente (client/entities/base.py): casar a
+            # mensagem específica e NÃO mascarar UnauthorizedClientRequest em
+            # geral, que é rejeição de autorização de verdade.
+            if "can not touch verkey" in str(e):
+                NYM_IDEMPOTENT.labels(node_id=_NODE_ID).inc()
+                self.applied += 1
+                logger.info(
+                    f"Entidade já registrada no ledger, reaplicação ignorada | "
+                    f"entity_id={entry.entity_id} did={entry.did}"
+                )
+                return
             NYM_FAILED.labels(node_id=_NODE_ID).inc()
             logger.error(f"FSM: falha ao aplicar entidade | entity_id={entry.entity_id} erro={e}")
             await self.pending.enqueue(entry, error=str(e))

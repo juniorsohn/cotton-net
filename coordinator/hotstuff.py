@@ -38,11 +38,17 @@ class HotStuffClient:
 
     async def wait_ready(self, timeout: float = 300.0) -> dict:
         """
-        Espera o daemon responder /status.
+        Espera o cluster COMITAR, não o daemon responder.
 
-        O cottonhs só sobe o HTTP depois de conectar nos peers (Gorums abre os
-        streams no Connect), então responder /status já significa que o cluster
-        de consenso está formado — é o equivalente ao "líder eleito" do RAFT.
+        A primeira versão disto esperava só o /status, e estava errada: ao
+        reiniciar uma réplica, o daemon volta a responder em ~2 s, mas o cluster
+        ficou ~65 s sem comitar. Quem anuncia prontidão pelo /status libera o
+        cliente contra um consenso travado — e a run começa com uma rajada de
+        503 que contamina a medição.
+
+        Por isso a sonda é ativa: POST /ready faz o daemon propor um no-op e
+        esperar o commit. Ele atravessa o consenso mas é descartado antes do
+        applier, então não toca no ledger.
         """
         loop = asyncio.get_event_loop()
         t0 = loop.time()
@@ -52,8 +58,16 @@ class HotStuffClient:
                 r = await self._client.get(f"{self.base_url}/status", timeout=2.0)
                 if r.status_code == 200:
                     st = r.json()
-                    logger.info(f"HotStuff pronto | url={self.base_url} status={st}")
-                    return st
+                    # Daemon de pé; agora o que importa: ele consegue comitar?
+                    probe = await self._client.post(f"{self.base_url}/ready", timeout=60.0)
+                    if probe.status_code == 200:
+                        logger.info(
+                            f"Consenso pronto (commit confirmado em "
+                            f"{probe.json().get('latency_ms', 0):.0f} ms) | "
+                            f"url={self.base_url} status={st}"
+                        )
+                        return st
+                    logger.debug(f"Daemon responde mas o cluster não comita | {probe.text.strip()[:120]}")
             except httpx.HTTPError:
                 pass
             decorrido = loop.time() - t0

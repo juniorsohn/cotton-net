@@ -346,6 +346,29 @@ func (d *daemon) handlePropose(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "latency_ms": latencyMs})
 }
 
+// handleReady propõe um no-op e espera o COMMIT. Prontidão aqui é o cluster
+// comitar, não o processo estar de pé: ao reiniciar uma réplica, o daemon volta
+// a responder /status em 2 s, mas o cluster levou ~65 s para voltar a comitar.
+// Quem anunciasse prontidão pelo /status liberaria escrita contra um cluster
+// travado — e é justamente esse o portão que o cn-client-10runs-fresh usa.
+//
+// O no-op tem Data vazio: atravessa o consenso, mas o onExec o descarta, então
+// não chega ao applier nem ao ledger.
+func (d *daemon) handleReady(w http.ResponseWriter, _ *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), d.proposeTimeout)
+	defer cancel()
+
+	t0 := time.Now()
+	_, err := d.submit(ctx, nil).Get()
+	latencyMs := float64(time.Since(t0).Microseconds()) / 1000
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]any{"ready": false, "error": err.Error(), "latency_ms": latencyMs})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ready": true, "latency_ms": latencyMs})
+}
+
 func (d *daemon) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	d.execMu.Lock()
 	applied, sum := d.applied, hex.EncodeToString(d.hash.Sum(nil))
@@ -565,6 +588,7 @@ func runReplica(args []string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/propose", d.handlePropose)
 	mux.HandleFunc("/status", d.handleStatus)
+	mux.HandleFunc("/ready", d.handleReady)
 	srv := &http.Server{Addr: self.HTTPAddr, Handler: mux}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
