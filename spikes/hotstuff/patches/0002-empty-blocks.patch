@@ -1,0 +1,138 @@
+diff --git a/consensus/consensus.go b/consensus/consensus.go
+index 0bcda52..bf90afa 100644
+--- a/consensus/consensus.go
++++ b/consensus/consensus.go
+@@ -1,6 +1,7 @@
+ package consensus
+ 
+ import (
++	"context"
+ 	"fmt"
+ 	"sync"
+ 	"time"
+@@ -110,6 +111,45 @@ func (cs *consensusBase) StopVoting(view hotstuff.View) {
+ 	}
+ }
+ 
++// getCommand returns the command for the next block. It normally blocks until the
++// command queue has a batch or the view times out. When empty blocks are enabled and
++// the chain still holds an uncommitted command, it does not block: it proposes
++// whatever is queued -- including an empty command -- because a chained consensus
++// only commits a block once its successors are chained on top of it, and waiting for
++// the view to time out would delay that commit by a full view. (COTTON-NET)
++func (cs *consensusBase) getCommand(cert hotstuff.SyncInfo) (hotstuff.Command, bool) {
++	if cs.opts.ShouldProposeEmptyBlocks() && cs.hasUncommittedCommand(cert) {
++		ctx, cancel := context.WithCancel(cs.eventLoop.Context())
++		cancel() // do not block: take whatever the queue already holds
++		cmd, _ := cs.commandQueue.Get(ctx)
++		return cmd, true
++	}
++	ctx, cancel := synchronizer.TimeoutContext(cs.eventLoop.Context(), cs.eventLoop)
++	defer cancel()
++	return cs.commandQueue.Get(ctx)
++}
++
++// hasUncommittedCommand walks the chain from the certified block down to the last
++// committed block, looking for a block that carries commands. While one exists, the
++// leader must keep chaining successors onto it. This is both the trigger and the
++// brake for empty blocks: once the last command-carrying block commits, the walk
++// returns false and the chain stops growing. (COTTON-NET)
++func (cs *consensusBase) hasUncommittedCommand(cert hotstuff.SyncInfo) bool {
++	qc, ok := cert.QC()
++	if !ok {
++		return false
++	}
++	committed := cs.CommittedBlock().View()
++	block, ok := cs.blockChain.LocalGet(qc.BlockHash())
++	for ok && block.View() > committed {
++		if len(block.Command()) > 0 {
++			return true
++		}
++		block, ok = cs.blockChain.LocalGet(block.Parent())
++	}
++	return false
++}
++
+ // Propose creates a new proposal.
+ func (cs *consensusBase) Propose(cert hotstuff.SyncInfo) {
+ 	cs.logger.Debug("Propose")
+@@ -124,10 +164,7 @@ func (cs *consensusBase) Propose(cert hotstuff.SyncInfo) {
+ 		}
+ 	}
+ 
+-	ctx, cancel := synchronizer.TimeoutContext(cs.eventLoop.Context(), cs.eventLoop)
+-	defer cancel()
+-
+-	cmd, ok := cs.commandQueue.Get(ctx)
++	cmd, ok := cs.getCommand(cert)
+ 	if !ok {
+ 		cs.logger.Debug("Propose: No command")
+ 		return
+diff --git a/modules/options.go b/modules/options.go
+index 1d4b598..95f6057 100644
+--- a/modules/options.go
++++ b/modules/options.go
+@@ -40,6 +40,8 @@ type Options struct {
+ 
+ 	shouldUseAggQC        bool
+ 	shouldVerifyVotesSync bool
++	// COTTON-NET: propose empty blocks to complete a pending chain.
++	shouldProposeEmptyBlocks bool
+ 
+ 	sharedRandomSeed   int64
+ 	connectionMetadata map[string]string
+@@ -115,6 +117,19 @@ func (opts *Options) ConnectionMetadata() map[string]string {
+ 	return opts.connectionMetadata
+ }
+ 
++// ShouldProposeEmptyBlocks returns true if the leader should propose a block even
++// when the command queue is empty, as long as the chain still holds an uncommitted
++// command. (COTTON-NET)
++func (opts *Options) ShouldProposeEmptyBlocks() bool {
++	return opts.shouldProposeEmptyBlocks
++}
++
++// SetShouldProposeEmptyBlocks sets the ShouldProposeEmptyBlocks setting to true.
++// (COTTON-NET)
++func (opts *Options) SetShouldProposeEmptyBlocks() {
++	opts.shouldProposeEmptyBlocks = true
++}
++
+ // SetShouldUseAggQC sets the ShouldUseAggQC setting to true.
+ func (opts *Options) SetShouldUseAggQC() {
+ 	opts.shouldUseAggQC = true
+diff --git a/replica/cmdcache.go b/replica/cmdcache.go
+index f13ad6b..a3e7c58 100644
+--- a/replica/cmdcache.go
++++ b/replica/cmdcache.go
+@@ -63,17 +63,27 @@ func (c *cmdCache) Get(ctx context.Context) (cmd hotstuff.Command, ok bool) {
+ 
+ 	c.mut.Lock()
+ awaitBatch:
+-	// wait until we can send a new batch.
+-	for c.cache.Len() <= c.batchSize {
++	// Wait until we can send a new batch. Note that addCommand signals as soon as
++	// the cache holds batchSize commands, so waiting for more than that would leave
++	// the last command of a burst stuck in the cache forever. (COTTON-NET: was <=)
++	for c.cache.Len() < c.batchSize {
+ 		c.mut.Unlock()
+ 		select {
+ 		case <-c.c:
+ 		case <-ctx.Done():
+-			return
++			// Batch timeout: propose whatever is cached instead of nothing, so a
++			// partial batch is not held back until more commands arrive. (COTTON-NET)
++			c.mut.Lock()
++			if c.cache.Len() == 0 {
++				c.mut.Unlock()
++				return
++			}
++			goto buildBatch
+ 		}
+ 		c.mut.Lock()
+ 	}
+ 
++buildBatch:
+ 	// Get the batch. Note that we may not be able to fill the batch, but that should be fine as long as we can send
+ 	// at least one command.
+ 	for i := 0; i < c.batchSize; i++ {

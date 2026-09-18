@@ -28,3 +28,9 @@ venv/
 # IDEs
 .vscode/
 .idea/
+# Spike HotStuff: clone do upstream (reconstruído por spikes/hotstuff/setup.sh),
+# binários compilados e artefatos de execução
+spikes/hotstuff/relab/
+spikes/hotstuff/bin/
+spikes/hotstuff/runs/
+spikes/hotstuff/demo/.run/
