@@ -1,27 +1,30 @@
 """
 COTTON-NET Coordinator — Ponto de entrada.
 
-Cada instância deste serviço representa um nó no cluster RAFT
-do COTTON-NET. Junto com o supernodo Indy local, forma a unidade
-física de um supernodo Sn da arquitetura COTTON-NET.
+Cada instância deste serviço representa uma réplica do consenso externo
+do COTTON-NET. Junto com o supernodo Indy local, forma a unidade física de
+um supernodo Sn da arquitetura COTTON-NET.
+
+O consenso externo é BFT (HotStuff), executado pelo daemon `cottonhs` — um
+processo Go irmão, no MESMO container (ver hotstuff.py). O Python não fala
+o protocolo: propõe e recebe commits por HTTP em 127.0.0.1.
 
 Responsabilidades:
     1. Manter conexão com o supernodo Indy local (VON Network)
-    2. Participar do cluster RAFT via raftify (eleição + replicação)
+    2. Propor entradas ao consenso HotStuff local (hotstuff.py)
     3. Expor API HTTP para o cottonclient (FastAPI)
-    4. Aplicar commits RAFT ao ledger Indy local (FSM)
+    4. Aplicar commits do consenso ao ledger Indy local (FSM)
     5. Gerenciar retry de transações falhas (PendingQueue)
 
 Topologia (exemplo com 3 nós):
-    Máquina 1: coordinator (líder RAFT) + Supernodo S1
-    Máquina 2: coordinator (seguidor)   + Supernodo S2
-    Máquina 3: coordinator (seguidor)   + Supernodo S3
+    Máquina 1: coordinator + cottonhs + Supernodo S1
+    Máquina 2: coordinator + cottonhs + Supernodo S2
+    Máquina 3: coordinator + cottonhs + Supernodo S3
 
 Configuração via variáveis de ambiente (.env):
     NODE_ID:         Identificador único deste nó (ex: "node-1") — usado em logs
-    NODE_NUM:        ID numérico inteiro deste nó no raftify (ex: 1, 2, 3, 4)
-    RAFT_ADDR:       Endereço RAFT deste nó (ex: "0.0.0.0:60061")
-    RAFT_PEERS:      Endereços dos outros nós RAFT (ex: "coordinator-2:60061,coordinator-3:60061")
+    NODE_NUM:        ID numérico inteiro desta réplica (ex: 1, 2, 3, 4)
+    HOTSTUFF_URL:    URL do daemon cottonhs local (padrão: http://127.0.0.1:8080)
     GENESIS_URL:     URL genesis do supernodo Indy local
     TRUSTEE_SEED:    Seed do trustee
     TRUSTEE_DID:     DID do trustee
@@ -35,11 +38,9 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 from loguru import logger
-from raftify import Raft, RaftConfig, Config, Peers, Peer, Slogger, InitialRole
 from prometheus_fastapi_instrumentator import Instrumentator
 from prometheus_client import REGISTRY, Counter, Histogram
 from prometheus_client.core import GaugeMetricFamily
@@ -47,6 +48,7 @@ from prometheus_client.core import GaugeMetricFamily
 from supernodes import SupernodeRegistry
 from pending import PendingQueue
 from fsm import CoordinatorFSM
+from hotstuff import HotStuffClient, HotStuffError
 from log_entry import NymLogEntry
 from cottontrust_core.wallet import create_wallet
 from cottontrust_core.identity import create_and_store_did
@@ -55,11 +57,9 @@ from cottontrust_core.identity import create_and_store_did
 # ── Configuração ──────────────────────────────────────────────────────────────
 
 NODE_ID      = os.environ["NODE_ID"]
-NODE_NUM     = int(os.environ["NODE_NUM"])   # ID inteiro exigido pelo raftify
-RAFT_ADDR    = os.environ["RAFT_ADDR"]
-RAFT_PEERS     = os.environ.get("RAFT_PEERS", "")
-RAFT_HOST      = os.environ.get("RAFT_HOST", "")       # IP físico do host (mode: host)
-RAFT_HOST_PORT = os.environ.get("RAFT_HOST_PORT", "")  # porta host-mode publicada
+NODE_NUM     = int(os.environ["NODE_NUM"])   # ID desta réplica no cluster HotStuff
+HOTSTUFF_URL = os.environ.get("HOTSTUFF_URL", "http://127.0.0.1:8080")
+HOTSTUFF_READY_TIMEOUT = float(os.environ.get("HOTSTUFF_READY_TIMEOUT", "300"))
 GENESIS_URL  = os.environ["GENESIS_URL"]
 TRUSTEE_SEED = os.environ["TRUSTEE_SEED"]
 TRUSTEE_DID  = os.environ["TRUSTEE_DID"]
@@ -87,8 +87,7 @@ logger.add(
 registry:       SupernodeRegistry | None  = None
 pending:        PendingQueue | None       = None
 fsm:            CoordinatorFSM | None     = None
-raft:           Raft | None               = None
-raft_node                                 = None
+consensus:      HotStuffClient | None     = None
 _background_tasks: list[asyncio.Task]    = []
 
 
@@ -97,15 +96,15 @@ _background_tasks: list[asyncio.Task]    = []
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Inicializa e encerra os componentes do Coordinator."""
-    global registry, pending, fsm, raft, raft_node, _background_tasks
+    global registry, pending, fsm, consensus, _background_tasks
 
-    logger.info(f"=== Coordinator iniciando | node={NODE_ID} raft={RAFT_ADDR} ===")
+    logger.info(f"=== Coordinator iniciando | node={NODE_ID} consenso={HOTSTUFF_URL} ===")
 
     # 1. Conecta ao supernodo Indy local — com RETRY.
     # No cn-deploy-seq os webservers dos SNs sobem escalonados; o coordinator
     # do último SN pode nascer minutos antes do seu genesis existir. Se ele
-    # MORRER aqui (era exit não-tratado), o bootstrap RAFT dos demais quebra
-    # em silêncio e o cluster fica sem líder para sempre (visto em n=128).
+    # MORRER aqui (era exit não-tratado), o bootstrap do consenso dos demais
+    # quebra em silêncio e o cluster não fecha quórum (visto em n=128 no RAFT).
     # Esperar em loop mantém o processo vivo e o bootstrap íntegro.
     registry = SupernodeRegistry(NODE_ID, GENESIS_URL)
     genesis_timeout = int(os.environ.get("GENESIS_RETRY_TIMEOUT", "900"))
@@ -141,10 +140,13 @@ async def lifespan(app: FastAPI):
         pending     = pending,
     )
 
-    # 5. Inicializa cluster RAFT
-    raft, raft_node = await _init_raft(fsm)
+    # 5. Conecta ao daemon de consenso local (processo irmão no container).
+    # Quem sobe o cottonhs é o entrypoint da imagem, não o Python: aqui só
+    # esperamos ele responder, o que já significa cluster HotStuff formado.
+    consensus = HotStuffClient(HOTSTUFF_URL)
+    await consensus.wait_ready(timeout=HOTSTUFF_READY_TIMEOUT)
 
-    # 6. Drena fila de entradas confirmadas pelo RAFT
+    # 6. Drena fila de entradas confirmadas pelo consenso
     _background_tasks.append(asyncio.create_task(fsm.drain_queue(), name="drain_queue"))
 
     # 7. Inicia worker de retry
@@ -178,6 +180,8 @@ async def lifespan(app: FastAPI):
     await asyncio.gather(*_background_tasks, return_exceptions=True)
     _background_tasks.clear()
     pending.stop()
+    if consensus is not None:
+        await consensus.aclose()
     await registry.teardown()
 
 
@@ -187,140 +191,6 @@ async def _init_trustee():
     did, verkey = await create_and_store_did(store, seed=TRUSTEE_SEED)
     logger.info(f"Trustee inicializado | did={did}")
     return store, did
-
-
-async def _wait_dns(host: str, timeout: int = 60) -> None:
-    """Aguarda até o hostname ser resolvível pelo DNS do Swarm overlay."""
-    import socket
-    for elapsed in range(0, timeout, 2):
-        try:
-            socket.getaddrinfo(host, None)
-            logger.debug(f"DNS resolvido | host={host} ({elapsed}s)")
-            return
-        except socket.gaierror:
-            await asyncio.sleep(2)
-    logger.warning(f"DNS não resolvido após {timeout}s | host={host}")
-
-
-async def _wait_port(host: str, port: int, timeout: int = 60) -> None:
-    """Aguarda até host:port aceitar conexões TCP (RAFT já em bind)."""
-    for elapsed in range(0, timeout, 2):
-        try:
-            _, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=2.0
-            )
-            writer.close()
-            await writer.wait_closed()
-            logger.debug(f"Porta RAFT alcançável | host={host}:{port} ({elapsed}s)")
-            return
-        except Exception:
-            await asyncio.sleep(2)
-    logger.warning(f"Porta RAFT não respondeu após {timeout}s | host={host}:{port}")
-
-
-def _get_container_ip() -> str:
-    """
-    Retorna o IP real do container no overlay Docker.
-
-    Raftify precisa de um IP bindável (não a VIP do serviço Swarm).
-    A VIP é roteável externamente mas não pode ser usada como bind address.
-    O IP do container é tanto bindável quanto roteável dentro do overlay.
-    """
-    import socket
-    import subprocess
-    try:
-        result = subprocess.run(["hostname", "-i"], capture_output=True, text=True)
-        for ip in result.stdout.strip().split():
-            if not ip.startswith("127.") and "." in ip:
-                return ip
-    except Exception:
-        pass
-    return socket.gethostbyname(socket.gethostname())
-
-
-async def _init_raft(fsm: CoordinatorFSM):
-    """
-    Inicializa o nó RAFT via raftify 0.1.67 usando padrão leader-first.
-
-    Coordinator-1 bootstrap como líder isolado.
-    Coordinators 2-4 obtêm ticket via Raft.request_id(bind_addr, leader_addr)
-    e entram no cluster com RaftNode.join_cluster(ticket).
-
-    Usa o IP real do container como addr de bind (não a VIP do serviço Swarm
-    nem 0.0.0.0). Para alcançar o líder, usa o nome DNS do serviço Swarm
-    (coordinator-1), que o overlay roteia para o container correto.
-    """
-    import os
-    os.makedirs("./raft-data", exist_ok=True)
-
-    raft_config = RaftConfig(election_tick=20, heartbeat_tick=3)
-    config = Config(raft_config=raft_config, log_dir="./raft-data")
-    slogger = Slogger.default()
-
-    raft_port = RAFT_ADDR.split(":")[-1]
-    container_ip = _get_container_ip()
-    bind_addr = f"{container_ip}:{raft_port}"
-    logger.info(f"RAFT addr | container_ip={container_ip} bind={bind_addr}")
-
-    # Todos os nós sobem com initial_peers declarando o cluster completo.
-    # request_id/join_cluster é para membros dinâmicos — no bootstrap inicial,
-    # todos devem participar da eleição ao mesmo tempo.
-    self_addr = (f"{RAFT_HOST}:{RAFT_HOST_PORT}"
-                 if (RAFT_HOST and RAFT_HOST_PORT)
-                 else f"coordinator-{NODE_NUM}:{raft_port}")
-    peer_map = {NODE_NUM: self_addr}
-    for entry in RAFT_PEERS.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        if "=" in entry:
-            num_str, addr = entry.split("=", 1)
-            num = int(num_str)
-        else:
-            host = entry.split(":")[0]
-            num = int(host.split("-")[-1])
-            addr = entry
-        peer_map[num] = addr
-
-    for num, addr in peer_map.items():
-        if num == NODE_NUM:
-            continue
-        host = addr.split(":")[0]
-        await _wait_dns(host, timeout=300)
-
-    initial_peers = Peers({})
-    for num, addr in peer_map.items():
-        initial_peers.add_peer(num, addr, InitialRole.VOTER)
-    config = Config(raft_config=raft_config, log_dir="./raft-data", initial_peers=initial_peers)
-    logger.info(f"RAFT peers | {peer_map}")
-
-    raft_inst = Raft.bootstrap(NODE_NUM, bind_addr, fsm, config, slogger)
-
-    async def _run_raft():
-        try:
-            await raft_inst.run()
-        except Exception as exc:
-            logger.error(f"RAFT run() encerrou com erro | node={NODE_ID} erro={exc}")
-
-    _background_tasks.append(asyncio.create_task(_run_raft(), name="raft_run"))
-
-    node = raft_inst.get_raft_node()
-
-    # Aguarda eleição — maioria (3 de 4) precisa estar online
-    for _ in range(150):
-        try:
-            leader_id = await node.get_leader_id()
-            if leader_id != 0:
-                break
-        except Exception:
-            pass
-        await asyncio.sleep(0.2)
-    else:
-        logger.warning(f"RAFT: cluster sem líder após 30s | node={NODE_ID}")
-
-    is_leader = await node.is_leader()
-    logger.info(f"RAFT iniciado | node={NODE_ID} addr={bind_addr} leader={is_leader}")
-    return raft_inst, node
 
 
 # ── Métricas Prometheus ───────────────────────────────────────────────────────
@@ -358,11 +228,13 @@ RETRY_DISCARDED = Counter(
     ["node_id"],
 )
 
-# Histograma: latência do consenso RAFT (propose → quórum confirmado)
-RAFT_PROPOSE_LATENCY = Histogram(
-    "cotton_raft_propose_duration_seconds",
-    "Latência do consenso RAFT externo: propose() até quórum confirmado",
-    ["node_id"],
+# Histograma: latência do consenso externo (propose → confirmação do quórum).
+# Nome neutro de propósito: o mesmo painel serve para comparar Raft (CFT, no
+# master) e HotStuff (BFT, nesta branch) — o motor vai no label `engine`.
+CONSENSUS_PROPOSE_LATENCY = Histogram(
+    "cotton_consensus_propose_duration_seconds",
+    "Latência do consenso externo: propose() até confirmação do quórum",
+    ["node_id", "engine"],
     buckets=[.01, .025, .05, .1, .25, .5, 1.0, 2.5, 5.0, 10.0],
 )
 
@@ -400,8 +272,10 @@ class RegisterResponse(BaseModel):
 
 
 class StatusResponse(BaseModel):
-    node_id:        str
-    raft_leader:    bool
+    node_id:           str
+    consensus:         str
+    consensus_ready:   bool
+    consensus_applied: int
     supernodo:      str
     alive:          bool
     pending:        int
@@ -413,23 +287,17 @@ class StatusResponse(BaseModel):
 @app.post("/register", response_model=RegisterResponse)
 async def register(req: RegisterRequest):
     """
-    Registra uma entidade no ledger via consenso RAFT + Indy.
+    Registra uma entidade no ledger via consenso HotStuff + Indy.
 
-    O líder RAFT propõe a entrada ao cluster. Após quórum,
-    cada nó aplica via FSM (submit_nym no Indy local).
+    Qualquer coordinator aceita: o daemon local manda o comando a todas as
+    réplicas por quorum call, então não há líder para onde redirecionar —
+    diferente do RAFT, que funilava tudo por um nó só.
     """
     if not registry.local.alive:
         raise HTTPException(
             status_code=503,
             detail=f"Supernodo local indisponível | node={NODE_ID}",
         )
-
-    if not await raft_node.is_leader():
-        leader_id = await raft_node.get_leader_id()
-        if leader_id and leader_id != 0:
-            leader_url = f"http://coordinator-{leader_id}:{API_PORT}/register"
-            logger.debug(f"Redirecionando para líder | node={NODE_ID} leader={leader_id}")
-            return RedirectResponse(url=leader_url, status_code=307)
 
     # Com paridade OFF, zera role/raw_attrs ANTES do propose: mantém o payload
     # RAFT byte-idêntico ao legado (coordinator_time_sec é métrica medida —
@@ -445,26 +313,58 @@ async def register(req: RegisterRequest):
     )
 
     try:
-        # Propõe ao cluster RAFT — bloqueia até quórum ou timeout
-        with RAFT_PROPOSE_LATENCY.labels(node_id=NODE_ID).time():
-            await raft_node.propose(entry.encode())
+        # Propõe ao consenso — bloqueia até f+1 réplicas executarem o comando.
+        # Como no RAFT, o retorno significa ORDENADO, não durável: a escrita no
+        # Indy é assíncrona (fsm.apply enfileira, drain_queue aplica).
+        with CONSENSUS_PROPOSE_LATENCY.labels(node_id=NODE_ID, engine="hotstuff").time():
+            await consensus.propose(entry.encode())
         logger.info(
-            f"Entrada proposta ao RAFT | "
+            f"Entrada proposta ao consenso | "
             f"entity_id={req.entity_id} did={req.did}"
         )
         return RegisterResponse(success=True)
 
+    except HotStuffError as e:
+        logger.error(f"Falha ao propor | entity_id={req.entity_id} erro={e}")
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        logger.error(f"Falha ao propor ao RAFT | entity_id={req.entity_id} erro={e}")
+        logger.error(f"Falha ao propor | entity_id={req.entity_id} erro={e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/apply", include_in_schema=False)
+async def apply(request: Request):
+    """
+    Entrega de commit vinda do daemon HotStuff local (gancho OnExec).
+
+    É o sentido Go → Python da fronteira: o que o raftify fazia chamando
+    fsm.apply() direto, o cottonhs faz por HTTP. O corpo são os bytes do
+    NymLogEntry, na ordem decidida pelo consenso.
+
+    Só aceita de 127.0.0.1: o daemon é processo irmão no mesmo container, e
+    ninguém de fora deve conseguir injetar entrada no FSM pulando o consenso.
+    Responde rápido porque fsm.apply só enfileira — quem escreve no Indy é o
+    drain_queue.
+    """
+    host = request.client.host if request.client else ""
+    if host not in ("127.0.0.1", "::1"):
+        logger.warning(f"/apply recusado | origem={host} node={NODE_ID}")
+        raise HTTPException(status_code=403, detail="somente o daemon local")
+
+    data = await request.body()
+    await fsm.apply(data)
+    return Response(status_code=204)
 
 
 @app.get("/status", response_model=StatusResponse)
 async def status():
-    """Retorna o status deste nó: RAFT, supernodo e pendências."""
+    """Retorna o status deste nó: consenso, supernodo e pendências."""
+    hs = await consensus.status() if consensus else {}
     return StatusResponse(
-        node_id     = NODE_ID,
-        raft_leader = (await raft_node.is_leader()) if raft_node else False,
+        node_id           = NODE_ID,
+        consensus         = "hotstuff",
+        consensus_ready   = bool(hs),
+        consensus_applied = int(hs.get("applied", 0)),
         supernodo   = registry.local.genesis_url,
         alive       = registry.local.alive,
         pending     = pending.size,

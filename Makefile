@@ -521,9 +521,11 @@ cn-client-10runs:
 # append-only), mas com as diferenças do CN:
 #   - cn-stop também varre containers órfãos via SSH (senha pedida UMA vez);
 #   - o deploy é o cn-deploy-seq, que já aguarda o genesis de CADA super-nó;
-#   - o "pronto p/ escrever" não é o genesis: é o RAFT eleger líder — polling
-#     em http://baia_s:800s/status até algum coordinator responder
-#     raft_leader=true (coordinator-s roda na baia s, porta host 8000+s).
+#   - o "pronto p/ escrever" não é o genesis: é o cluster HotStuff fechar —
+#     polling em http://baia_s:800s/status até um coordinator responder
+#     consensus_ready=true (coordinator-s roda na baia s, porta host 8000+s).
+#     Diferente do RAFT, não há líder: qualquer coordinator aceita /register,
+#     então basta UM pronto para o cliente começar.
 # Params: RUNS, NODES, SUPERNODOS, SETTLE (espera pós-líder), READY_TIMEOUT.
 # Uso: make cn-client-10runs-fresh RUNS=10 NODES=256 SUPERNODOS=4 [SETTLE=60]
 cn-client-10runs-fresh:
@@ -541,18 +543,18 @@ cn-client-10runs-fresh:
 	  echo "   [3/5] $(CN_DEPLOY) (genesis por SN)"; \
 	  $(MAKE) --no-print-directory $(CN_DEPLOY) NODES=$(NODES) SUPERNODOS=$(SUPERNODOS) || { echo "   $(CN_DEPLOY) falhou"; exit 1; }; \
 	  docker service update --restart-condition none --detach $$svc >/dev/null 2>&1 || true; \
-	  echo "   [4/5] aguardando líder RAFT (até $(READY_TIMEOUT)s)"; \
-	  t=0; lider=""; \
-	  until [ -n "$$lider" ]; do \
+	  echo "   [4/5] aguardando consenso HotStuff (até $(READY_TIMEOUT)s)"; \
+	  t=0; pronto=""; \
+	  until [ -n "$$pronto" ]; do \
 	    for s in $$(seq 1 $(SUPERNODOS)); do \
 	      ip=$${BAIA_IPS_ARR[$$((s-1))]}; \
 	      curl -sf --max-time 5 "http://$$ip:$$((8000+s))/status" 2>/dev/null \
-	        | grep -Eq '"raft_leader": ?true' && { lider="coordinator-$$s"; break; }; \
+	        | grep -Eq '"consensus_ready": ?true' && { pronto="coordinator-$$s"; break; }; \
 	    done; \
-	    [ -n "$$lider" ] && break; \
-	    sleep 5; t=$$((t+5)); [ $$t -ge $(READY_TIMEOUT) ] && { echo "   timeout esperando líder RAFT"; exit 1; }; \
+	    [ -n "$$pronto" ] && break; \
+	    sleep 5; t=$$((t+5)); [ $$t -ge $(READY_TIMEOUT) ] && { echo "   timeout esperando consenso HotStuff"; exit 1; }; \
 	  done; \
-	  echo "   líder RAFT: $$lider; estabilizando $(SETTLE)s..."; sleep $(SETTLE); \
+	  echo "   consenso pronto em $$pronto; estabilizando $(SETTLE)s..."; sleep $(SETTLE); \
 	  echo "   [5/5] client run $$i"; \
 	  prev=$$(docker service ps $$svc -q --no-trunc 2>/dev/null | head -1); \
 	  docker service scale --detach $$svc=1 >/dev/null; \

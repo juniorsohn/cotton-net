@@ -195,7 +195,7 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Latência RAFT — Consenso Externo (propose → quórum)",
+      "title": "Latência HotStuff — Consenso Externo (propose → quórum)",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
       "fieldConfig": {
@@ -212,19 +212,19 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(cotton_raft_propose_duration_seconds_bucket[1m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(cotton_consensus_propose_duration_seconds_bucket[1m])))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(cotton_raft_propose_duration_seconds_bucket[1m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(cotton_consensus_propose_duration_seconds_bucket[1m])))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(cotton_raft_propose_duration_seconds_bucket[1m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(cotton_consensus_propose_duration_seconds_bucket[1m])))",
           "legendFormat": "p99",
           "refId": "C"
         }
@@ -321,7 +321,7 @@
     {
       "id": 10,
       "type": "timeseries",
-      "title": "Latência HTTP /register — E2E cliente → RAFT → resposta",
+      "title": "Latência HTTP /register — E2E cliente → consenso → resposta",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 28},
       "fieldConfig": {

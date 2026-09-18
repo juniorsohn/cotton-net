@@ -1,16 +1,20 @@
 # Pacote compartilhado com primitivas blockchain
 cottontrust-core
 
-# RAFT — implementação sobre tikv/raft-rs via Rust/PyO3
-raftify>=0.1.67
+# Consenso externo: o motor é o daemon Go `cottonhs` (HotStuff/relab), que roda
+# como processo irmão no mesmo container. O Python só fala HTTP com ele.
+# (O raftify, motor CFT anterior, vive na branch master.)
 
-# API HTTP — recebe requisições do cottonclient
+# API HTTP — recebe requisições do cottonclient e os commits do cottonhs
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.7.0
 
 # Métricas Prometheus — expõe /metrics com latência e throughput da API
 prometheus-fastapi-instrumentator>=6.1.0
+
+# Cliente HTTP assíncrono — fala com o daemon de consenso local
+httpx>=0.27.0
 
 # Utilitários
 loguru>=0.7.0
